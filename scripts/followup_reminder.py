@@ -16,8 +16,13 @@ NOTIFY_EMAIL = os.environ.get('NOTIFY_EMAIL', 'sherry995995@gmail.com')
 
 def get_conn():
     return psycopg2.connect(
-        host=DB_HOST, port=5432, dbname='postgres',
-        user='postgres', password=DB_PASSWORD
+        host=os.environ.get('DB_HOST', 'aws-0-ap-southeast-1.pooler.supabase.com'),
+        port=int(os.environ.get('DB_PORT', '6543')),
+        dbname='postgres',
+        user=os.environ.get('DB_USER', 'postgres.gnqddnujljyqjsfjrrri'),
+        password=DB_PASSWORD,
+        connect_timeout=15,
+        sslmode='require'
     )
 
 
