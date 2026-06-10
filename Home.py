@@ -1,0 +1,227 @@
+"""EETOON CRM — Main entry with login and dashboard overview."""
+
+import streamlit as st
+import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
+from datetime import date, timedelta
+from utils.database import get_stats, get_all_leads, get_due_followups, get_setting, get_reactivation_due
+from utils.email_sender import process_due_emails
+
+st.set_page_config(
+    page_title="EETOON CRM",
+    page_icon="🧳",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ── AUTH ──────────────────────────────────────────────────────────────────────
+def check_auth():
+    try:
+        correct_pw = st.secrets["auth"]["password"]
+    except Exception:
+        correct_pw = "Eetoon2026!"
+
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+
+    if not st.session_state.authenticated:
+        st.markdown("""
+        <div style='text-align:center;padding:60px 0 30px'>
+        <h1>🧳 EETOON CRM</h1>
+        <p style='color:#666;font-size:16px'>B2B 客户开发管理系统</p>
+        </div>
+        """, unsafe_allow_html=True)
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            pw = st.text_input("访问密码", type="password", placeholder="输入密码登录")
+            if st.button("登录", use_container_width=True, type="primary"):
+                if pw == correct_pw:
+                    st.session_state.authenticated = True
+                    st.rerun()
+                else:
+                    st.error("密码错误")
+        st.stop()
+
+check_auth()
+
+# ── AUTO PROCESS QUEUE (runs every page load) ─────────────────────────────────
+if "last_queue_check" not in st.session_state:
+    st.session_state.last_queue_check = date.today()
+
+if st.session_state.last_queue_check != date.today():
+    sent, failed = process_due_emails()
+    st.session_state.last_queue_check = date.today()
+    if sent > 0:
+        st.toast(f"✅ 自动发送 {sent} 封邮件", icon="📬")
+    if failed > 0:
+        st.toast(f"⚠️ {failed} 封邮件发送失败，请检查队列", icon="⚠️")
+
+# ── LOAD DATA ─────────────────────────────────────────────────────────────────
+stats = get_stats()
+leads = get_all_leads()
+due_followups = get_due_followups()
+reactivation_due = get_reactivation_due()
+statuses = get_setting("statuses", [])
+status_color_map = {s["label"]: s["color"] for s in statuses} if statuses else {}
+
+# ── SIDEBAR ───────────────────────────────────────────────────────────────────
+with st.sidebar:
+    st.markdown("### 🧳 EETOON CRM")
+    st.markdown("---")
+    st.markdown(f"**Sherry XIE** | EETOON GROUP")
+    st.markdown(f"📅 {date.today().strftime('%Y年%m月%d日')}")
+    st.markdown("---")
+
+    # Quick manual queue trigger
+    if st.button("📬 立即处理发送队列", use_container_width=True):
+        with st.spinner("发送中..."):
+            sent, failed = process_due_emails()
+        if sent:
+            st.success(f"已发送 {sent} 封")
+        elif failed:
+            st.error(f"{failed} 封失败")
+        else:
+            st.info("暂无到期邮件")
+
+    st.markdown("---")
+    st.markdown("##### 📍 今日提醒")
+    if due_followups:
+        for lead in due_followups[:5]:
+            st.markdown(f"• **{lead['company_name'][:18]}** 待跟进")
+    else:
+        st.markdown("✅ 今日无到期跟进")
+
+    if reactivation_due:
+        st.markdown(f"##### 🔔 冷静期到期")
+        for lead in reactivation_due[:3]:
+            st.markdown(f"• {lead['company_name'][:18]}")
+
+# ── HEADER ────────────────────────────────────────────────────────────────────
+st.markdown("## 📊 总览仪表盘")
+if due_followups:
+    st.warning(f"⏰ **今日有 {len(due_followups)} 家客户需要跟进** — 前往「跟进管理」处理", icon="📋")
+
+# ── KPI CARDS ─────────────────────────────────────────────────────────────────
+col1, col2, col3, col4, col5, col6 = st.columns(6)
+kpis = [
+    ("总客户数", stats['total'], "#1976D2", "👥"),
+    ("开发中", stats['active'], "#FF9800", "📤"),
+    ("有回复", stats['replied'], "#4CAF50", "💬"),
+    ("冷静期", stats['cold'], "#607D8B", "❄️"),
+    ("待发邮件", stats['pending_emails'], "#9C27B0", "📬"),
+    ("累计发信", stats['total_sent'], "#00BCD4", "✉️"),
+]
+for col, (label, value, color, icon) in zip([col1,col2,col3,col4,col5,col6], kpis):
+    with col:
+        st.markdown(f"""
+        <div style='background:{color}15;border-left:4px solid {color};
+                    padding:12px 16px;border-radius:8px;margin-bottom:8px'>
+        <div style='font-size:22px;font-weight:700;color:{color}'>{icon} {value}</div>
+        <div style='font-size:12px;color:#666;margin-top:2px'>{label}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+st.markdown("---")
+
+# ── STATUS CHART + SCORE DISTRIBUTION ────────────────────────────────────────
+col_left, col_right = st.columns([1, 1])
+
+with col_left:
+    st.markdown("#### 客户状态分布")
+    if leads:
+        status_counts = {}
+        for lead in leads:
+            s = lead.get('status', '新建')
+            status_counts[s] = status_counts.get(s, 0) + 1
+
+        colors = [status_color_map.get(s, "#9E9E9E") for s in status_counts.keys()]
+        fig = go.Figure(data=[go.Pie(
+            labels=list(status_counts.keys()),
+            values=list(status_counts.values()),
+            marker_colors=colors,
+            hole=0.45,
+            textfont_size=12,
+        )])
+        fig.update_layout(
+            showlegend=True, height=280,
+            margin=dict(t=10, b=10, l=10, r=10),
+            legend=dict(font=dict(size=11))
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("暂无数据")
+
+with col_right:
+    st.markdown("#### 客户评分分布 (A/B/C级)")
+    if leads:
+        grade_counts = {'A': 0, 'B': 0, 'C': 0}
+        for lead in leads:
+            g = lead.get('score_grade', 'C')
+            grade_counts[g] = grade_counts.get(g, 0) + 1
+        fig2 = go.Figure(data=[go.Bar(
+            x=list(grade_counts.keys()),
+            y=list(grade_counts.values()),
+            marker_color=['#4CAF50', '#FF9800', '#9E9E9E'],
+            text=list(grade_counts.values()),
+            textposition='outside',
+        )])
+        fig2.update_layout(
+            height=280, margin=dict(t=10, b=10, l=10, r=10),
+            xaxis_title="等级", yaxis_title="客户数",
+            plot_bgcolor='rgba(0,0,0,0)'
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+
+st.markdown("---")
+
+# ── ALL LEADS TABLE ───────────────────────────────────────────────────────────
+st.markdown("#### 全部客户一览")
+
+if leads:
+    df_data = []
+    for lead in leads:
+        status = lead.get('status', '')
+        color = status_color_map.get(status, '#9E9E9E')
+        due_flag = any(l['id'] == lead['id'] for l in due_followups)
+        df_data.append({
+            '评分': f"{lead.get('score_grade','C')} ({lead.get('score',0)})",
+            '公司名': lead['company_name'],
+            '联系人': lead.get('contact_name', ''),
+            '地区': lead.get('location', ''),
+            '规模': lead.get('company_size', ''),
+            '状态': status,
+            '触达次数': lead.get('touch_count', 0),
+            '发送日': str(lead.get('send_date', '')) if lead.get('send_date') else '—',
+            'Day7跟进': str(lead.get('day7_date', '')) if lead.get('day7_date') else '—',
+            '⏰': '📋 待跟进' if due_flag else '',
+        })
+
+    df = pd.DataFrame(df_data)
+
+    # Color rows by status
+    def color_status(val):
+        color_map = status_color_map
+        c = color_map.get(val, '#9E9E9E')
+        return f'background-color: {c}25; color: {c}; font-weight: 600; border-radius: 4px; padding: 2px 6px'
+
+    styled = df.style.applymap(color_status, subset=['状态'])
+    st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
+else:
+    st.info("暂无客户数据")
+
+# ── FOLLOWUP ALERT ────────────────────────────────────────────────────────────
+if due_followups:
+    st.markdown("---")
+    st.markdown("#### ⏰ 今日到期跟进")
+    for lead in due_followups:
+        with st.expander(f"📌 {lead['company_name']} — {lead.get('contact_name','')} ({lead.get('location','')})", expanded=False):
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown(f"**邮件:** {lead.get('email','')}")
+                st.markdown(f"**触达次数:** {lead.get('touch_count',0)}/3")
+                st.markdown(f"**上次主题:** {lead.get('last_subject','—')}")
+            with col_b:
+                st.markdown(f"**推荐Hook方向:** {lead.get('hook_direction','—')}")
+                st.markdown(f"**推荐CTA:** {lead.get('recommended_cta','—')}")
+            st.markdown(f"[→ 前往邮件编辑器](编辑跟进邮件)")
