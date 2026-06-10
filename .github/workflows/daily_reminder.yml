@@ -1,0 +1,32 @@
+name: Daily Follow-up Reminder
+
+on:
+  schedule:
+    # 9AM Beijing time = 1AM UTC
+    - cron: '0 1 * * 1-5'
+  workflow_dispatch:
+
+jobs:
+  send-reminder:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary
+
+      - name: Send daily reminder
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SMTP_HOST: smtp.qiye.163.com
+          SMTP_PORT: '465'
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: python scripts/followup_reminder.py

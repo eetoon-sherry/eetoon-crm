@@ -1,0 +1,33 @@
+name: Email Queue Processor
+
+on:
+  schedule:
+    # Every 10 minutes, Mon-Fri
+    - cron: '*/10 1-13 * * 1-5'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  process-queue:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary
+
+      - name: Process email queue
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SMTP_HOST: smtp.qiye.163.com
+          SMTP_PORT: '465'
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          SENDER_NAME: 'Sherry | EETOON GROUP'
+          BCC_EMAIL: ${{ secrets.BCC_EMAIL }}
+        run: python scripts/process_queue_action.py

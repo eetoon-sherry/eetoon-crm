@@ -1,0 +1,30 @@
+name: Weekly Client Discovery
+
+on:
+  schedule:
+    # Every Monday 8AM Beijing = 0AM UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+jobs:
+  discover-clients:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install psycopg2-binary requests beautifulsoup4
+
+      - name: Run client discovery
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
+        run: python scripts/weekly_discovery.py
