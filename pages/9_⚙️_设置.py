@@ -2,6 +2,7 @@
 
 import streamlit as st
 import json
+import os
 from utils.database import get_setting, set_setting
 
 st.set_page_config(page_title="系统设置 | EETOON CRM", page_icon="⚙️", layout="wide")
@@ -232,10 +233,13 @@ with tab5:
         confirm_pw = st.text_input("确认新密码", type="password")
         if st.button("修改密码"):
             try:
-                correct = st.secrets["auth"]["password"]
+                correct = st.secrets.get("auth", {}).get("password", "")
             except Exception:
-                correct = "Eetoon2026!"
-            if current_pw != correct:
+                correct = ""
+            correct = correct or os.getenv("CRM_PASSWORD", "")
+            if not correct:
+                st.error("当前访问密码未配置，请先在 Streamlit Secrets 中设置 [auth].password")
+            elif current_pw != correct:
                 st.error("当前密码错误")
             elif new_pw != confirm_pw:
                 st.error("两次新密码不一致")

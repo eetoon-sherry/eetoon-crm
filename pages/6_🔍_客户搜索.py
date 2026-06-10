@@ -4,7 +4,7 @@ import streamlit as st
 import json
 from datetime import date
 from utils.database import (get_discovery_queue, add_discovery_candidate,
-                             add_lead, get_setting, update_lead)
+                             add_lead, get_setting, update_discovery_status)
 from utils.web_search import search_companies, extract_company_info, guess_email_formats
 
 st.set_page_config(page_title="客户搜索 | EETOON CRM", page_icon="🔍", layout="wide")
@@ -168,23 +168,14 @@ with tab_pending:
                             }
                             result = add_lead(lead_data)
                             if result:
-                                # Update discovery queue status
-                                from utils.database import get_conn
-                                conn = get_conn()
-                                cur = conn.cursor()
-                                cur.execute("UPDATE discovery_queue SET status='approved' WHERE id=%s", (cand['id'],))
-                                conn.commit(); cur.close(); conn.close()
+                                update_discovery_status(cand['id'], 'approved')
                                 st.success(f"✅ 已添加 {cand.get('company_name','')} 到客户池！")
                                 st.rerun()
                             else:
                                 st.error("邮件地址已存在或添加失败")
 
                         if rejected:
-                            from utils.database import get_conn
-                            conn = get_conn()
-                            cur = conn.cursor()
-                            cur.execute("UPDATE discovery_queue SET status='rejected' WHERE id=%s", (cand['id'],))
-                            conn.commit(); cur.close(); conn.close()
+                            update_discovery_status(cand['id'], 'rejected')
                             st.info("已排除")
                             st.rerun()
 

@@ -1,16 +1,26 @@
 """IMAP inbox monitor — detect client replies and update lead status."""
 
 import imaplib, email, re
+import os
 import streamlit as st
 from utils.database import get_lead_by_email, update_lead_status, add_note
 
 
 def get_imap_config():
     try:
-        s = st.secrets["imap"]
-        return s["host"], int(s["port"]), s["user"], s["password"]
+        s = st.secrets.get("imap", {})
     except Exception:
-        return "imap.qiye.163.com", 993, "sherry.xie@eetoon.com", "ANbDzSKtN9k@Bg#%"
+        s = {}
+
+    host = s.get("host") or os.getenv("IMAP_HOST")
+    port = int(s.get("port") or os.getenv("IMAP_PORT") or 993)
+    user = s.get("user") or os.getenv("IMAP_USER")
+    password = s.get("password") or os.getenv("IMAP_PASS")
+
+    if not host or not user or not password:
+        raise RuntimeError("IMAP is not configured. Add [imap] settings in Streamlit Secrets.")
+
+    return host, port, user, password
 
 
 def check_inbox_for_replies(days_back: int = 3) -> list:

@@ -5,7 +5,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, timedelta
-from utils.database import get_all_leads, get_conn
+from utils.database import get_all_leads, get_email_history_daily, get_last_db_error
 
 st.set_page_config(page_title="数据分析 | EETOON CRM", page_icon="📊", layout="wide")
 
@@ -94,30 +94,19 @@ st.markdown("---")
 
 # ── EMAIL HISTORY ANALYSIS ────────────────────────────────────────────────────
 st.markdown("#### ✉️ 邮件发送历史")
-try:
-    conn = get_conn()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT DATE(sent_at) as send_date, COUNT(*) as count
-        FROM email_history
-        WHERE sent_at IS NOT NULL
-        GROUP BY DATE(sent_at)
-        ORDER BY send_date DESC
-        LIMIT 30
-    """)
-    rows = cur.fetchall()
-    cur.close(); conn.close()
-
-    if rows:
-        df_hist = pd.DataFrame(rows, columns=['发送日期', '封数'])
-        fig_hist = px.bar(df_hist, x='发送日期', y='封数',
-                         title='每日发送量', color_discrete_sequence=['#1976D2'])
-        fig_hist.update_layout(height=250, margin=dict(t=30, b=10))
-        st.plotly_chart(fig_hist, use_container_width=True)
-    else:
-        st.info("暂无发送历史数据")
-except Exception as e:
-    st.error(f"数据加载失败：{e}")
+rows = get_email_history_daily()
+if rows:
+    df_hist = pd.DataFrame(
+        [{"发送日期": row.get("send_date"), "封数": row.get("count", 0)} for row in rows]
+    )
+    fig_hist = px.bar(df_hist, x='发送日期', y='封数',
+                     title='每日发送量', color_discrete_sequence=['#1976D2'])
+    fig_hist.update_layout(height=250, margin=dict(t=30, b=10))
+    st.plotly_chart(fig_hist, use_container_width=True)
+elif get_last_db_error():
+    st.warning("数据库暂不可用，邮件发送历史暂不显示。")
+else:
+    st.info("暂无发送历史数据")
 
 st.markdown("---")
 

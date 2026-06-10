@@ -6,13 +6,20 @@ from datetime import date
 from email.mime.text import MIMEText
 import urllib.request, urllib.error
 
-SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://gnqddnujljyqjsfjrrri.supabase.co')
-SUPABASE_KEY = os.environ['SUPABASE_SERVICE_KEY']
+def required_env(name):
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+SUPABASE_URL = required_env('SUPABASE_URL').rstrip('/')
+SUPABASE_KEY = required_env('SUPABASE_SERVICE_KEY')
 SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = os.environ.get('SMTP_USER', '')
 SMTP_PASS    = os.environ.get('SMTP_PASS', '')
-NOTIFY_EMAIL = os.environ.get('NOTIFY_EMAIL', 'sherry995995@gmail.com')
+NOTIFY_EMAIL = os.environ.get('NOTIFY_EMAIL', '')
 
 
 def sb_get(path, params=None):
@@ -37,6 +44,10 @@ def get_setting(key, default=None):
 
 
 def main():
+    if not SMTP_USER or not SMTP_PASS or not NOTIFY_EMAIL:
+        print("Reminder email skipped: SMTP_USER, SMTP_PASS, or NOTIFY_EMAIL is not configured.")
+        return
+
     today = date.today()
     today_iso = str(today)
 

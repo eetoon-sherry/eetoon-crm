@@ -14,7 +14,17 @@ if not st.session_state.get("authenticated"):
 st.markdown("## 👥 客户档案")
 
 # ── FILTER BAR ────────────────────────────────────────────────────────────────
-statuses_cfg = get_setting("statuses", [])
+DEFAULT_STATUSES = [
+    {"label": "新建", "color": "#9E9E9E"},
+    {"label": "已发送第1封", "color": "#2196F3"},
+    {"label": "已发送第2封", "color": "#FF9800"},
+    {"label": "已发送第3封", "color": "#9C27B0"},
+    {"label": "有回复", "color": "#4CAF50"},
+    {"label": "无意向", "color": "#795548"},
+    {"label": "退信", "color": "#F44336"},
+    {"label": "冷静期-90天后重新激活", "color": "#607D8B"},
+]
+statuses_cfg = get_setting("statuses", DEFAULT_STATUSES)
 status_labels = ["全部"] + [s["label"] for s in statuses_cfg]
 status_color_map = {s["label"]: s["color"] for s in statuses_cfg}
 

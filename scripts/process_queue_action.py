@@ -7,12 +7,19 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import urllib.request, urllib.error
 
-SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://gnqddnujljyqjsfjrrri.supabase.co')
-SUPABASE_KEY = os.environ['SUPABASE_SERVICE_KEY']
+def required_env(name):
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Missing required environment variable: {name}")
+    return value
+
+
+SUPABASE_URL = required_env('SUPABASE_URL').rstrip('/')
+SUPABASE_KEY = required_env('SUPABASE_SERVICE_KEY')
 SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
-SMTP_USER    = os.environ['SMTP_USER']
-SMTP_PASS    = os.environ['SMTP_PASS']
+SMTP_USER    = required_env('SMTP_USER')
+SMTP_PASS    = required_env('SMTP_PASS')
 SENDER_NAME  = os.environ.get('SENDER_NAME', 'Sherry | EETOON GROUP')
 BCC_EMAIL    = os.environ.get('BCC_EMAIL', '')
 

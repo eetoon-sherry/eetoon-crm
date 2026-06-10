@@ -1,6 +1,7 @@
 """Email sending via NetEase Enterprise SMTP."""
 
 import ssl, smtplib, logging, uuid, json
+import os
 import streamlit as st
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -25,11 +26,21 @@ FORBIDDEN_PHRASES = ["competitive price","best quality","hope to cooperate","one
 
 def get_smtp_config():
     try:
-        s = st.secrets["smtp"]
-        return s["host"], int(s["port"]), s["user"], s["password"], s["sender_name"], s["bcc"]
+        s = st.secrets.get("smtp", {})
     except Exception:
-        return ("smtp.qiye.163.com", 465, "sherry.xie@eetoon.com",
-                "ANbDzSKtN9k@Bg#%", "Sherry | EETOON GROUP", "sherry995995@gmail.com")
+        s = {}
+
+    host = s.get("host") or os.getenv("SMTP_HOST")
+    port = int(s.get("port") or os.getenv("SMTP_PORT") or 465)
+    user = s.get("user") or os.getenv("SMTP_USER")
+    password = s.get("password") or os.getenv("SMTP_PASS")
+    sender_name = s.get("sender_name") or os.getenv("SENDER_NAME") or "Sherry | EETOON GROUP"
+    bcc = s.get("bcc") or os.getenv("BCC_EMAIL") or ""
+
+    if not host or not user or not password:
+        raise RuntimeError("SMTP is not configured. Add [smtp] settings in Streamlit Secrets.")
+
+    return host, port, user, password, sender_name, bcc
 
 
 def get_signature():

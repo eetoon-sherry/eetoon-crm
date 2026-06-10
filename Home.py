@@ -5,7 +5,15 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, timedelta
-from utils.database import get_stats, get_all_leads, get_due_followups, get_setting, get_reactivation_due
+from utils.database import (
+    get_all_leads,
+    get_due_followups,
+    get_last_db_error,
+    get_reactivation_due,
+    get_setting,
+    get_stats,
+    has_db_config,
+)
 from utils.email_sender import process_due_emails
 
 st.set_page_config(
@@ -17,10 +25,17 @@ st.set_page_config(
 
 # ── AUTH ──────────────────────────────────────────────────────────────────────
 def check_auth():
+    import os
+
     try:
-        correct_pw = st.secrets["auth"]["password"]
+        correct_pw = st.secrets.get("auth", {}).get("password", "")
     except Exception:
-        correct_pw = "Eetoon2026!"
+        correct_pw = ""
+    correct_pw = correct_pw or os.getenv("CRM_PASSWORD", "")
+
+    if not correct_pw:
+        st.error("访问密码未配置。请在 Streamlit Secrets 中设置 [auth].password。")
+        st.stop()
 
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
@@ -97,8 +112,18 @@ with st.sidebar:
         for lead in reactivation_due[:3]:
             st.markdown(f"• {lead['company_name'][:18]}")
 
+    db_error = get_last_db_error()
+    if db_error:
+        st.markdown("---")
+        st.warning("数据库暂不可用，当前显示为空数据。请检查 Supabase Secrets。")
+
 # ── HEADER ────────────────────────────────────────────────────────────────────
 st.markdown("## 📊 总览仪表盘")
+if not has_db_config():
+    st.warning("数据库未配置：请在 Streamlit Secrets 中添加 `[supabase]` 的连接信息。")
+elif get_last_db_error():
+    st.warning("数据库连接失败，页面已进入空数据模式。修复连接后刷新即可恢复。")
+
 if due_followups:
     st.warning(f"⏰ **今日有 {len(due_followups)} 家客户需要跟进** — 前往「跟进管理」处理", icon="📋")
 

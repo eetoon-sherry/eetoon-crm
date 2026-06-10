@@ -16,7 +16,7 @@ jobs:
           python-version: '3.11'
       - name: Send daily reminder
         env:
-          SUPABASE_URL: https://gnqddnujljyqjsfjrrri.supabase.co
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
