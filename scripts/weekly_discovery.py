@@ -1,60 +1,71 @@
 #!/usr/bin/env python3
-"""Weekly auto-discovery — search for new promotional products distributors."""
+"""Weekly auto-discovery — uses Supabase REST API."""
 
-import os, ssl, smtplib, json, psycopg2, psycopg2.extras, requests
+import os, ssl, smtplib, json
 from datetime import datetime
 from email.mime.text import MIMEText
-from bs4 import BeautifulSoup
+import urllib.request, urllib.error, urllib.parse
+try:
+    import requests
+    from bs4 import BeautifulSoup
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
 
-DB_HOST      = os.environ['DB_HOST']
-DB_PASSWORD  = os.environ['DB_PASSWORD']
+SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://gnqddnujljyqjsfjrrri.supabase.co')
+SUPABASE_KEY = os.environ['SUPABASE_SERVICE_KEY']
 SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = os.environ.get('SMTP_USER', '')
 SMTP_PASS    = os.environ.get('SMTP_PASS', '')
 NOTIFY_EMAIL = os.environ.get('NOTIFY_EMAIL', '')
 
-HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-}
+HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
 
 
-def get_conn():
-    return psycopg2.connect(
-        host=os.environ.get('DB_HOST', 'aws-0-ap-southeast-1.pooler.supabase.com'),
-        port=int(os.environ.get('DB_PORT', '6543')),
-        dbname='postgres',
-        user=os.environ.get('DB_USER', 'postgres.gnqddnujljyqjsfjrrri'),
-        password=DB_PASSWORD,
-        connect_timeout=15,
-        sslmode='require'
-    )
+def sb_request(method, path, data=None, params=None):
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    if params:
+        url += '?' + '&'.join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items())
+    headers = {
+        'apikey': SUPABASE_KEY,
+        'Authorization': f'Bearer {SUPABASE_KEY}',
+        'Content-Type': 'application/json',
+        'Prefer': 'return=representation',
+    }
+    body = json.dumps(data).encode() if data else None
+    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except Exception as e:
+        print(f"API error: {e}")
+        return []
 
 
-def get_existing_websites(cur):
-    cur.execute("SELECT LOWER(website) FROM leads WHERE website != ''")
-    return {row[0] for row in cur.fetchall()}
+def get_setting(key, default=None):
+    rows = sb_request('GET', 'settings', params={'key': f'eq.{key}', 'select': 'value'})
+    return rows[0]['value'] if rows else default
 
 
-def search_google(query, max_results=8):
-    from urllib.parse import quote
-    url = f"https://www.google.com/search?q={quote(query)}&num=15"
+def search_google(query, max_results=5):
+    if not HAS_REQUESTS:
+        return []
+    url = f"https://www.google.com/search?q={urllib.parse.quote(query)}&num=15"
     results = []
     try:
         resp = requests.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(resp.text, 'html.parser')
-        skip_domains = ['linkedin.com','facebook.com','yelp.com','yellowpages.com',
-                       'bbb.org','indeed.com','google.com','amazon.com','ppai.org']
+        skip = ['linkedin.com','facebook.com','yelp.com','yellowpages.com',
+                'bbb.org','indeed.com','google.com','amazon.com','ppai.org']
         for div in soup.select('div.g')[:max_results+5]:
             title_el = div.select_one('h3')
             link_el = div.select_one('a')
             snip_el = div.select_one('.VwiC3b')
             if not title_el or not link_el:
                 continue
-            href = link_el.get('href','')
-            if not href.startswith('http'):
-                continue
-            if any(d in href for d in skip_domains):
+            href = link_el.get('href', '')
+            if not href.startswith('http') or any(d in href for d in skip):
                 continue
             results.append({
                 'company_name': title_el.get_text(strip=True),
@@ -69,69 +80,50 @@ def search_google(query, max_results=8):
 
 
 def main():
-    conn = get_conn()
-    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    enabled = get_setting('auto_discovery_enabled', True)
+    if not enabled:
+        print("Auto discovery disabled."); return
 
-    # Get settings
-    cur.execute("SELECT value FROM settings WHERE key='auto_discovery_enabled'")
-    row = cur.fetchone()
-    if not row or not row['value']:
-        print("Auto discovery disabled."); conn.close(); return
+    keywords = get_setting('discovery_keywords', ['promotional products distributor'])
+    states   = get_setting('discovery_states', ['TX','FL','CA','IL','CO'])
 
-    cur.execute("SELECT value FROM settings WHERE key='discovery_keywords'")
-    kw_row = cur.fetchone()
-    keywords = kw_row['value'] if kw_row else ['promotional products distributor']
+    # Get existing websites to avoid duplicates
+    existing_leads = sb_request('GET', 'leads', params={'select': 'website'})
+    existing = {r.get('website','').lower() for r in existing_leads if r.get('website')}
 
-    cur.execute("SELECT value FROM settings WHERE key='discovery_states'")
-    st_row = cur.fetchone()
-    states = st_row['value'] if st_row else ['TX','FL','CA','IL','CO']
-
-    existing = get_existing_websites(cur)
-    cur2 = conn.cursor()
+    existing_disc = sb_request('GET', 'discovery_queue', params={'select': 'website'})
+    existing |= {r.get('website','').lower() for r in existing_disc if r.get('website')}
 
     new_candidates = []
-    for keyword in keywords[:2]:  # Limit to 2 keywords to avoid rate limiting
-        for state in states[:5]:  # Limit to 5 states
+    for keyword in (keywords or [])[:2]:
+        for state in (states or [])[:5]:
             query = f"{keyword} {state}"
             print(f"Searching: {query}")
             results = search_google(query, max_results=5)
             for r in results:
-                site = r['website'].lower()
-                if site not in existing:
-                    cur2.execute("""
-                        INSERT INTO discovery_queue
-                            (company_name, website, location, research_brief, status, source)
-                        VALUES (%s, %s, %s, %s::jsonb, 'pending_review', 'auto_weekly')
-                        ON CONFLICT DO NOTHING
-                    """, (
-                        r['company_name'], r['website'], state,
-                        json.dumps({'snippet': r.get('snippet',''), 'search_query': query})
-                    ))
+                site = r.get('website','').lower()
+                if site and site not in existing:
+                    sb_request('POST', 'discovery_queue', data={
+                        'company_name': r['company_name'],
+                        'website': r['website'],
+                        'location': state,
+                        'research_brief': {'snippet': r.get('snippet',''), 'query': query},
+                        'status': 'pending_review',
+                        'source': 'auto_weekly',
+                    })
                     existing.add(site)
                     new_candidates.append(r)
 
-    conn.commit()
-    cur2.close()
-    cur.close()
-    conn.close()
-
     print(f"Found {len(new_candidates)} new candidates")
 
-    # Send summary email
     if new_candidates and SMTP_USER and NOTIFY_EMAIL:
         lines = [
             f"🔍 EETOON CRM — 本周自动搜索报告",
-            f"发现 {len(new_candidates)} 家新候选公司，请前往「客户搜索」→「待审核候选」审核",
-            "",
+            f"发现 {len(new_candidates)} 家新候选，请前往「客户搜索」→「待审核候选」审核", "",
         ]
         for r in new_candidates[:10]:
-            lines.append(f"• {r['company_name']}")
-            lines.append(f"  {r['website']}")
-            if r.get('snippet'):
-                lines.append(f"  {r['snippet'][:80]}")
-            lines.append("")
-        lines.append("---")
-        lines.append("前往审核：https://eetoon-crm.streamlit.app")
+            lines += [f"• {r['company_name']}", f"  {r['website']}", ""]
+        lines += ["---", "前往审核：https://eetoon-crm.streamlit.app"]
 
         msg = MIMEText("\n".join(lines), 'plain', 'utf-8')
         msg['Subject'] = f"[EETOON CRM] 本周新发现 {len(new_candidates)} 家候选客户"

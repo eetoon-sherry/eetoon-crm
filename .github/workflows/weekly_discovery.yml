@@ -15,13 +15,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Install dependencies
-        run: pip install psycopg2-binary requests beautifulsoup4
+        run: pip install requests beautifulsoup4
       - name: Run client discovery
         env:
-          DB_HOST: aws-0-ap-southeast-1.pooler.supabase.com
-          DB_PORT: '6543'
-          DB_USER: postgres.gnqddnujljyqjsfjrrri
-          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          SUPABASE_URL: https://gnqddnujljyqjsfjrrri.supabase.co
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASS: ${{ secrets.SMTP_PASS }}
           NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
