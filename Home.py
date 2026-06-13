@@ -306,7 +306,11 @@ if leads:
         c = color_map.get(val, '#9E9E9E')
         return f'background-color: {c}25; color: {c}; font-weight: 600; border-radius: 4px; padding: 2px 6px'
 
-    styled = df.style.applymap(color_status, subset=['状态'])
+    styler = df.style
+    if hasattr(styler, "map"):
+        styled = styler.map(color_status, subset=['状态'])
+    else:
+        styled = styler.applymap(color_status, subset=['状态'])
     st.dataframe(styled, use_container_width=True, height=420, hide_index=True)
 else:
     st.info("暂无客户数据")
