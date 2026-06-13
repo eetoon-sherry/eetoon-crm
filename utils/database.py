@@ -34,6 +34,9 @@ LAST_DB_ERROR_KEY = "_db_last_error"
 SCHEMA_VERSION_KEY = "schema_version"
 SCHEMA_VERSION_VALUE = "campaign_growth_v1"
 _SCHEMA_READY = False
+PROJECT_REF = "gnqddnujljyqjsfjrrri"
+DEFAULT_POOLER_HOST = "aws-1-ap-southeast-1.pooler.supabase.com"
+DEFAULT_POOLER_PORT = 6543
 
 
 def _secret_section(name: str) -> dict[str, Any]:
@@ -54,6 +57,10 @@ def _read_db_config() -> dict[str, Any]:
         "user": db.get("db_user") or db.get("user") or os.getenv("SUPABASE_DB_USER") or os.getenv("PGUSER") or "postgres",
         "password": db.get("db_password") or db.get("password") or os.getenv("SUPABASE_DB_PASSWORD") or os.getenv("PGPASSWORD"),
         "sslmode": db.get("sslmode") or os.getenv("PGSSLMODE") or "require",
+        "hostaddr": db.get("hostaddr") or os.getenv("PGHOSTADDR"),
+        "pooler_host": db.get("pooler_host") or os.getenv("SUPABASE_POOLER_HOST") or DEFAULT_POOLER_HOST,
+        "pooler_port": db.get("pooler_port") or os.getenv("SUPABASE_POOLER_PORT") or DEFAULT_POOLER_PORT,
+        "pooler_user": db.get("pooler_user") or os.getenv("SUPABASE_POOLER_USER"),
     }
     database_url = db.get("database_url") or os.getenv("DATABASE_URL")
     legacy_url = db.get("url")
@@ -99,6 +106,49 @@ def has_db_config() -> bool:
     return bool(config.get("dsn") or (config.get("host") and config.get("password")))
 
 
+def _connect_with_config(config: dict[str, Any], *, use_hostaddr: bool = True):
+    hostaddr = config.get("hostaddr")
+    if use_hostaddr and not hostaddr:
+        try:
+            ipv4 = socket.getaddrinfo(config["host"], int(config["port"]), socket.AF_INET, socket.SOCK_STREAM)
+            if ipv4:
+                hostaddr = ipv4[0][4][0]
+        except Exception:
+            hostaddr = None
+
+    connect_kwargs = dict(
+        host=config["host"],
+        port=int(config["port"]),
+        dbname=config["dbname"],
+        user=config["user"],
+        password=config["password"],
+        sslmode=config["sslmode"],
+        connect_timeout=10,
+    )
+    if use_hostaddr and hostaddr:
+        connect_kwargs["hostaddr"] = hostaddr
+    return psycopg2.connect(**connect_kwargs)
+
+
+def _pooler_config(config: dict[str, Any]) -> Optional[dict[str, Any]]:
+    if not config.get("password"):
+        return None
+    direct_user = str(config.get("user") or "postgres")
+    if "." in direct_user:
+        pooler_user = direct_user
+    else:
+        pooler_user = config.get("pooler_user") or f"{direct_user}.{PROJECT_REF}"
+    return {
+        "host": config.get("pooler_host") or DEFAULT_POOLER_HOST,
+        "port": config.get("pooler_port") or DEFAULT_POOLER_PORT,
+        "dbname": config.get("dbname") or "postgres",
+        "user": pooler_user,
+        "password": config.get("password"),
+        "sslmode": config.get("sslmode") or "require",
+        "hostaddr": None,
+    }
+
+
 def get_conn():
     """Create a PostgreSQL connection.
 
@@ -109,26 +159,16 @@ def get_conn():
         if config.get("dsn"):
             conn = psycopg2.connect(config["dsn"], connect_timeout=10)
         elif config.get("host") and config.get("password"):
-            hostaddr = config.get("hostaddr") or os.getenv("PGHOSTADDR")
-            if not hostaddr:
+            try:
+                conn = _connect_with_config(config)
+            except Exception as direct_exc:
+                pooler = _pooler_config(config)
+                if not pooler:
+                    raise
                 try:
-                    ipv4 = socket.getaddrinfo(config["host"], int(config["port"]), socket.AF_INET, socket.SOCK_STREAM)
-                    if ipv4:
-                        hostaddr = ipv4[0][4][0]
+                    conn = _connect_with_config(pooler, use_hostaddr=False)
                 except Exception:
-                    hostaddr = None
-            connect_kwargs = dict(
-                host=config["host"],
-                port=int(config["port"]),
-                dbname=config["dbname"],
-                user=config["user"],
-                password=config["password"],
-                sslmode=config["sslmode"],
-                connect_timeout=10,
-            )
-            if hostaddr:
-                connect_kwargs["hostaddr"] = hostaddr
-            conn = psycopg2.connect(**connect_kwargs)
+                    raise direct_exc
         else:
             raise RuntimeError(
                 "Database is not configured. Add [supabase] db_host/db_password "
