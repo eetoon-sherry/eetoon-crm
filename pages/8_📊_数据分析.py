@@ -4,8 +4,9 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-from datetime import date, timedelta
+from datetime import timedelta
 from utils.database import get_all_leads, get_email_history_daily, get_last_db_error
+from utils.timezone import beijing_today
 
 st.set_page_config(page_title="数据分析 | EETOON CRM", page_icon="📊", layout="wide")
 
@@ -134,7 +135,7 @@ with col_exp1:
     } for l in leads])
     csv = df_export.to_csv(index=False).encode('utf-8-sig')
     st.download_button("📥 导出全部客户 (CSV)", csv,
-                      f"eetoon_leads_{date.today()}.csv", "text/csv",
+                      f"eetoon_leads_{beijing_today()}.csv", "text/csv",
                       use_container_width=True)
 with col_exp2:
     st.caption("Excel格式：下载CSV后用Excel打开即可，中文字段使用utf-8-sig编码")

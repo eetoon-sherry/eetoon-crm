@@ -17,6 +17,7 @@ from utils.database import (
     has_db_config,
 )
 from utils.email_sender import process_due_emails
+from utils.timezone import beijing_today
 
 st.set_page_config(
     page_title="EETOON CRM",
@@ -64,12 +65,14 @@ check_auth()
 ensure_schema()
 
 # ── AUTO PROCESS QUEUE (runs every page load) ─────────────────────────────────
-if "last_queue_check" not in st.session_state:
-    st.session_state.last_queue_check = date.today()
+today_cn = beijing_today()
 
-if st.session_state.last_queue_check != date.today():
+if "last_queue_check" not in st.session_state:
+    st.session_state.last_queue_check = today_cn
+
+if st.session_state.last_queue_check != today_cn:
     sent, failed = process_due_emails()
-    st.session_state.last_queue_check = date.today()
+    st.session_state.last_queue_check = today_cn
     if sent > 0:
         st.toast(f"✅ 自动发送 {sent} 封邮件", icon="📬")
     if failed > 0:
@@ -89,7 +92,7 @@ with st.sidebar:
     st.markdown("### 🧳 EETOON CRM")
     st.markdown("---")
     st.markdown(f"**Sherry XIE** | EETOON GROUP")
-    st.markdown(f"📅 {date.today().strftime('%Y年%m月%d日')}")
+    st.markdown(f"📅 {today_cn.strftime('%Y年%m月%d日')}")
     st.markdown("---")
 
     # Quick manual queue trigger

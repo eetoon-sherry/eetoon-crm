@@ -4,6 +4,7 @@ import imaplib, email, re
 import os
 import streamlit as st
 from utils.database import get_lead_by_email, update_lead_status, add_note
+from utils.timezone import beijing_today
 
 
 def get_imap_config():
@@ -35,8 +36,8 @@ def check_inbox_for_replies(days_back: int = 3) -> list:
         mail.login(user, password)
         mail.select('INBOX')
 
-        from datetime import date, timedelta
-        since_date = (date.today() - timedelta(days=days_back)).strftime('%d-%b-%Y')
+        from datetime import timedelta
+        since_date = (beijing_today() - timedelta(days=days_back)).strftime('%d-%b-%Y')
         _, data = mail.search(None, f'(SINCE {since_date})')
 
         for num in data[0].split():

@@ -17,6 +17,7 @@ from typing import Any, Optional
 import psycopg2
 import psycopg2.extras
 import streamlit as st
+from utils.timezone import beijing_today
 
 
 DEFAULT_STATS = {
@@ -403,7 +404,7 @@ def update_queue_status(queue_id: str, status: str, error: str = None) -> bool:
 
 
 def get_due_followups(check_date=None):
-    check_date = check_date or date.today()
+    check_date = check_date or beijing_today()
     return _fetch_all(
         """
         SELECT * FROM leads
@@ -421,7 +422,7 @@ def get_due_followups(check_date=None):
 
 
 def get_reactivation_due(check_date=None):
-    check_date = check_date or date.today()
+    check_date = check_date or beijing_today()
     return _fetch_all(
         """
         SELECT * FROM leads
@@ -543,7 +544,7 @@ def get_email_history_daily(limit: int = 30):
 
 def get_sent_count_today(campaign_id: Optional[int] = None) -> int:
     ensure_schema()
-    today = date.today()
+    today = beijing_today()
     try:
         with db_cursor() as (_, cur):
             if campaign_id:

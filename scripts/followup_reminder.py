@@ -2,9 +2,10 @@
 """Daily follow-up reminder — uses Supabase REST API."""
 
 import os, ssl, smtplib
-from datetime import date
+from datetime import datetime
 from email.mime.text import MIMEText
 from supabase_rest import SupabaseRestClient
+from zoneinfo import ZoneInfo
 
 def required_env(name):
     value = os.environ.get(name)
@@ -38,7 +39,7 @@ def main():
         print("Reminder email skipped: SMTP_USER, SMTP_PASS, or NOTIFY_EMAIL is not configured.")
         return
 
-    today = date.today()
+    today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
     today_iso = str(today)
 
     cold_statuses = '有回复,无意向,退信,冷静期-90天后重新激活'

@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from utils.database import (get_due_followups, get_all_leads, update_lead,
                              get_setting, get_reactivation_due)
 from utils.email_sender import validate_content
+from utils.timezone import beijing_today
 
 st.set_page_config(page_title="跟进管理 | EETOON CRM", page_icon="📅", layout="wide")
 
@@ -12,6 +13,7 @@ if not st.session_state.get("authenticated"):
     st.warning("请先登录"); st.stop()
 
 st.markdown("## 📅 跟进管理")
+today_cn = beijing_today()
 
 tab1, tab2, tab3 = st.tabs(["📋 到期跟进", "📆 日历视图", "❄️ 冷静期激活"])
 
@@ -148,13 +150,13 @@ with tab1:
                 with st.expander("📅 调整跟进日期"):
                     adj1, adj2, adj3 = st.columns(3)
                     with adj1:
-                        new_d7 = st.date_input("Day7", value=lead.get('day7_date') or date.today(),
+                        new_d7 = st.date_input("Day7", value=lead.get('day7_date') or today_cn,
                                                key=f"adj7_{lead['id']}")
                     with adj2:
-                        new_d14 = st.date_input("Day14", value=lead.get('day14_date') or date.today(),
+                        new_d14 = st.date_input("Day14", value=lead.get('day14_date') or today_cn,
                                                 key=f"adj14_{lead['id']}")
                     with adj3:
-                        new_d21 = st.date_input("Day21", value=lead.get('day21_date') or date.today(),
+                        new_d21 = st.date_input("Day21", value=lead.get('day21_date') or today_cn,
                                                 key=f"adj21_{lead['id']}")
                     if st.button("保存日期", key=f"save_dates_{lead['id']}"):
                         update_lead(lead['id'], day7_date=new_d7, day14_date=new_d14, day21_date=new_d21)
@@ -166,7 +168,7 @@ with tab1:
 with tab2:
     st.markdown("#### 📆 未来30天跟进日历")
     all_leads = get_all_leads()
-    today = date.today()
+    today = today_cn
     calendar_data = {}
 
     for lead in all_leads:
@@ -206,7 +208,7 @@ with tab3:
         st.caption("当前冷静期客户（激活日期未到）：")
         cold_leads = [l for l in get_all_leads() if l.get('status') == '冷静期-90天后重新激活']
         for l in cold_leads:
-            days_left = (l.get('reactivation_date') - date.today()).days if l.get('reactivation_date') else '?'
+            days_left = (l.get('reactivation_date') - today_cn).days if l.get('reactivation_date') else '?'
             st.markdown(f"• {l['company_name']} | 还剩 {days_left} 天 | 激活日期：{l.get('reactivation_date','—')}")
     else:
         st.warning(f"🔔 **{len(reactivation)} 家客户冷静期已到，建议重新激活**")
