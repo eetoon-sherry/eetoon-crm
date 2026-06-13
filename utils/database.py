@@ -50,7 +50,10 @@ def _read_db_config() -> dict[str, Any]:
         "user": db.get("db_user") or db.get("user") or os.getenv("SUPABASE_DB_USER") or os.getenv("PGUSER") or "postgres",
         "password": db.get("db_password") or db.get("password") or os.getenv("SUPABASE_DB_PASSWORD") or os.getenv("PGPASSWORD"),
     }
-    database_url = db.get("database_url") or db.get("url") or os.getenv("DATABASE_URL")
+    database_url = db.get("database_url") or os.getenv("DATABASE_URL")
+    legacy_url = db.get("url")
+    if not database_url and isinstance(legacy_url, str) and legacy_url.startswith(("postgres://", "postgresql://")):
+        database_url = legacy_url
     if database_url:
         config["dsn"] = database_url
     return config
