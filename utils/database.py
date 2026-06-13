@@ -47,17 +47,35 @@ def _secret_section(name: str) -> dict[str, Any]:
     return dict(section) if section else {}
 
 
+def _truthy(value: Any) -> Optional[bool]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _read_db_config() -> dict[str, Any]:
     """Read Postgres config from Streamlit secrets or environment variables."""
     db = _secret_section("supabase")
+    host = db.get("db_host") or db.get("host") or os.getenv("SUPABASE_DB_HOST") or os.getenv("PGHOST")
+    project_ref = db.get("project_ref") or os.getenv("SUPABASE_PROJECT_REF") or PROJECT_REF
+    raw_prefer_pooler = db.get("prefer_pooler")
+    if raw_prefer_pooler is None:
+        raw_prefer_pooler = os.getenv("SUPABASE_PREFER_POOLER")
+    prefer_pooler = _truthy(raw_prefer_pooler)
+    if prefer_pooler is None:
+        prefer_pooler = host == f"db.{project_ref}.supabase.co"
     config = {
-        "host": db.get("db_host") or db.get("host") or os.getenv("SUPABASE_DB_HOST") or os.getenv("PGHOST"),
+        "host": host,
         "port": db.get("db_port") or db.get("port") or os.getenv("SUPABASE_DB_PORT") or os.getenv("PGPORT") or 5432,
         "dbname": db.get("db_name") or db.get("dbname") or os.getenv("SUPABASE_DB_NAME") or os.getenv("PGDATABASE") or "postgres",
         "user": db.get("db_user") or db.get("user") or os.getenv("SUPABASE_DB_USER") or os.getenv("PGUSER") or "postgres",
         "password": db.get("db_password") or db.get("password") or os.getenv("SUPABASE_DB_PASSWORD") or os.getenv("PGPASSWORD"),
         "sslmode": db.get("sslmode") or os.getenv("PGSSLMODE") or "require",
         "hostaddr": db.get("hostaddr") or os.getenv("PGHOSTADDR"),
+        "project_ref": project_ref,
+        "prefer_pooler": prefer_pooler,
         "pooler_host": db.get("pooler_host") or os.getenv("SUPABASE_POOLER_HOST") or DEFAULT_POOLER_HOST,
         "pooler_port": db.get("pooler_port") or os.getenv("SUPABASE_POOLER_PORT") or DEFAULT_POOLER_PORT,
         "pooler_user": db.get("pooler_user") or os.getenv("SUPABASE_POOLER_USER"),
@@ -137,7 +155,8 @@ def _pooler_config(config: dict[str, Any]) -> Optional[dict[str, Any]]:
     if "." in direct_user:
         pooler_user = direct_user
     else:
-        pooler_user = config.get("pooler_user") or f"{direct_user}.{PROJECT_REF}"
+        project_ref = config.get("project_ref") or PROJECT_REF
+        pooler_user = config.get("pooler_user") or f"{direct_user}.{project_ref}"
     return {
         "host": config.get("pooler_host") or DEFAULT_POOLER_HOST,
         "port": config.get("pooler_port") or DEFAULT_POOLER_PORT,
@@ -159,16 +178,25 @@ def get_conn():
         if config.get("dsn"):
             conn = psycopg2.connect(config["dsn"], connect_timeout=10)
         elif config.get("host") and config.get("password"):
-            try:
-                conn = _connect_with_config(config)
-            except Exception as direct_exc:
-                pooler = _pooler_config(config)
-                if not pooler:
-                    raise
+            pooler = _pooler_config(config)
+            if config.get("prefer_pooler") and pooler:
                 try:
                     conn = _connect_with_config(pooler, use_hostaddr=False)
-                except Exception:
-                    raise direct_exc
+                except Exception as pooler_exc:
+                    try:
+                        conn = _connect_with_config(config)
+                    except Exception:
+                        raise pooler_exc
+            else:
+                try:
+                    conn = _connect_with_config(config)
+                except Exception as direct_exc:
+                    if not pooler:
+                        raise
+                    try:
+                        conn = _connect_with_config(pooler, use_hostaddr=False)
+                    except Exception:
+                        raise direct_exc
         else:
             raise RuntimeError(
                 "Database is not configured. Add [supabase] db_host/db_password "

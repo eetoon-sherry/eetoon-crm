@@ -37,6 +37,8 @@ def get_db_diagnostics() -> dict[str, str]:
         "user": str(config.get("user") or ""),
         "sslmode": str(config.get("sslmode") or ""),
         "hostaddr": str(config.get("hostaddr") or ""),
+        "project_ref": str(config.get("project_ref") or ""),
+        "prefer_pooler": "yes" if config.get("prefer_pooler") else "no",
         "pooler_host": str(config.get("pooler_host") or ""),
         "pooler_port": str(config.get("pooler_port") or ""),
         "pooler_user": str(config.get("pooler_user") or ""),
