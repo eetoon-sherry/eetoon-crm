@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Weekly auto-discovery — uses Supabase REST API."""
 
-import os, ssl, smtplib, json
-from datetime import datetime
+import os, ssl, smtplib
 from email.mime.text import MIMEText
-import urllib.request, urllib.error, urllib.parse
+import urllib.parse
+from supabase_rest import SupabaseRestClient
 try:
     import requests
     from bs4 import BeautifulSoup
@@ -21,6 +21,7 @@ def required_env(name):
 
 SUPABASE_URL = required_env('SUPABASE_URL').rstrip('/')
 SUPABASE_KEY = required_env('SUPABASE_SERVICE_KEY')
+SB = SupabaseRestClient(SUPABASE_URL, SUPABASE_KEY)
 SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = os.environ.get('SMTP_USER', '')
@@ -31,23 +32,7 @@ HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 
 
 def sb_request(method, path, data=None, params=None):
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
-    if params:
-        url += '?' + '&'.join(f"{k}={urllib.parse.quote(str(v))}" for k, v in params.items())
-    headers = {
-        'apikey': SUPABASE_KEY,
-        'Authorization': f'Bearer {SUPABASE_KEY}',
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation',
-    }
-    body = json.dumps(data).encode() if data else None
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        print(f"API error: {e}")
-        return []
+    return SB.request(method, path, data=data, params=params)
 
 
 def get_setting(key, default=None):
@@ -87,6 +72,7 @@ def search_google(query, max_results=5):
 
 
 def main():
+    SB.health_check()
     enabled = get_setting('auto_discovery_enabled', True)
     if not enabled:
         print("Auto discovery disabled."); return

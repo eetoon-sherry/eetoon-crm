@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Daily follow-up reminder — uses Supabase REST API."""
 
-import os, ssl, smtplib, json
+import os, ssl, smtplib
 from datetime import date
 from email.mime.text import MIMEText
-import urllib.request, urllib.error
+from supabase_rest import SupabaseRestClient
 
 def required_env(name):
     value = os.environ.get(name)
@@ -15,6 +15,7 @@ def required_env(name):
 
 SUPABASE_URL = required_env('SUPABASE_URL').rstrip('/')
 SUPABASE_KEY = required_env('SUPABASE_SERVICE_KEY')
+SB = SupabaseRestClient(SUPABASE_URL, SUPABASE_KEY)
 SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = os.environ.get('SMTP_USER', '')
@@ -23,19 +24,7 @@ NOTIFY_EMAIL = os.environ.get('NOTIFY_EMAIL', '')
 
 
 def sb_get(path, params=None):
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
-    if params:
-        url += '?' + '&'.join(f"{k}={v}" for k, v in params.items())
-    req = urllib.request.Request(url, headers={
-        'apikey': SUPABASE_KEY,
-        'Authorization': f'Bearer {SUPABASE_KEY}',
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except Exception as e:
-        print(f"Error: {e}")
-        return []
+    return SB.request('GET', path, params=params)
 
 
 def get_setting(key, default=None):
@@ -44,6 +33,7 @@ def get_setting(key, default=None):
 
 
 def main():
+    SB.health_check()
     if not SMTP_USER or not SMTP_PASS or not NOTIFY_EMAIL:
         print("Reminder email skipped: SMTP_USER, SMTP_PASS, or NOTIFY_EMAIL is not configured.")
         return

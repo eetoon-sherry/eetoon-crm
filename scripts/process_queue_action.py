@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """GitHub Actions email queue processor — uses Supabase REST API."""
 
-import os, ssl, smtplib, json
+import os, ssl, smtplib
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
-import urllib.request, urllib.error
+from supabase_rest import SupabaseRestClient
 
 def required_env(name):
     value = os.environ.get(name)
@@ -16,6 +16,7 @@ def required_env(name):
 
 SUPABASE_URL = required_env('SUPABASE_URL').rstrip('/')
 SUPABASE_KEY = required_env('SUPABASE_SERVICE_KEY')
+SB = SupabaseRestClient(SUPABASE_URL, SUPABASE_KEY)
 SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = required_env('SMTP_USER')
@@ -25,23 +26,7 @@ BCC_EMAIL    = os.environ.get('BCC_EMAIL', '')
 
 
 def sb_request(method, path, data=None, params=None):
-    url = f"{SUPABASE_URL}/rest/v1/{path}"
-    if params:
-        url += '?' + '&'.join(f"{k}={v}" for k, v in params.items())
-    headers = {
-        'apikey': SUPABASE_KEY,
-        'Authorization': f'Bearer {SUPABASE_KEY}',
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation',
-    }
-    body = json.dumps(data).encode() if data else None
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        print(f"HTTP {e.code}: {e.read().decode()}")
-        return []
+    return SB.request(method, path, data=data, params=params)
 
 
 def get_setting(key, default=None):
@@ -94,6 +79,7 @@ def next_allowed_day(d, allowed_weekdays):
 
 
 def main():
+    SB.health_check()
     signature = get_signature()
     send_days  = get_setting('send_days', ['Tuesday', 'Wednesday', 'Thursday'])
     intervals  = get_setting('followup_intervals', [7, 14, 21])
