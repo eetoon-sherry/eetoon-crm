@@ -104,11 +104,13 @@ def send_now(to_email: str, to_name: str, subject: str, body: str) -> tuple[bool
 
 
 def queue_email(lead_id: int, company: str, to_email: str, to_name: str,
-                subject: str, body: str, state_abbr: str) -> dict:
+                subject: str, body: str, state_abbr: str, campaign_id=None,
+                template_id=None, touch_number: int = 1, requires_approval: bool = True) -> dict:
     scheduled_utc, tz_name, local_time = next_send_window(state_abbr)
     job = {
         'queue_id': str(uuid.uuid4())[:8],
         'lead_id': lead_id,
+        'campaign_id': campaign_id,
         'company_name': company,
         'to_email': to_email,
         'to_name': to_name,
@@ -118,6 +120,10 @@ def queue_email(lead_id: int, company: str, to_email: str, to_name: str,
         'scheduled_utc': scheduled_utc,
         'scheduled_local': local_time.strftime('%Y-%m-%d %H:%M %Z'),
         'status': 'pending',
+        'requires_approval': requires_approval,
+        'approved_at': datetime.now(timezone.utc) if not requires_approval else None,
+        'template_id': template_id,
+        'touch_number': touch_number,
     }
     add_to_queue(job)
     return job
@@ -125,14 +131,33 @@ def queue_email(lead_id: int, company: str, to_email: str, to_name: str,
 
 def process_due_emails():
     """Process all pending emails whose scheduled time has passed."""
-    from utils.database import get_pending_queue, update_queue_status, update_lead
+    from utils.database import (
+        get_campaign,
+        get_pending_queue,
+        get_sent_count_today,
+        update_queue_status,
+        update_lead,
+    )
     from datetime import date, timedelta
 
     now_utc = datetime.now(timezone.utc)
     pending = get_pending_queue()
     sent_count, failed_count = 0, 0
+    campaign_sent_cache = {}
+    campaign_limit_cache = {}
 
     for job in pending:
+        if job.get('requires_approval') and not job.get('approved_at'):
+            continue
+        campaign_id = job.get('campaign_id')
+        if campaign_id:
+            if campaign_id not in campaign_sent_cache:
+                campaign_sent_cache[campaign_id] = get_sent_count_today(campaign_id)
+            if campaign_id not in campaign_limit_cache:
+                campaign = get_campaign(campaign_id) or {}
+                campaign_limit_cache[campaign_id] = int(campaign.get('daily_send_limit') or 10)
+            if campaign_sent_cache[campaign_id] >= campaign_limit_cache[campaign_id]:
+                continue
         scheduled = job['scheduled_utc']
         if hasattr(scheduled, 'tzinfo') and scheduled.tzinfo is None:
             scheduled = scheduled.replace(tzinfo=timezone.utc)
@@ -173,6 +198,7 @@ def process_due_emails():
                         )
                 add_email_history({
                     'lead_id': job.get('lead_id'),
+                    'campaign_id': job.get('campaign_id'),
                     'company_name': job['company_name'],
                     'to_email': job['to_email'],
                     'to_name': job['to_name'],
@@ -183,8 +209,12 @@ def process_due_emails():
                     'recipient_tz': job.get('recipient_tz'),
                     'sent_at': now_utc,
                     'queue_id': job['queue_id'],
+                    'template_id': job.get('template_id'),
+                    'touch_number': job.get('touch_number'),
                 })
                 sent_count += 1
+                if campaign_id:
+                    campaign_sent_cache[campaign_id] = campaign_sent_cache.get(campaign_id, 0) + 1
             else:
                 update_queue_status(job['queue_id'], 'failed', err)
                 failed_count += 1

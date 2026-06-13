@@ -6,6 +6,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 from datetime import date, timedelta
 from utils.database import (
+    ensure_schema,
+    get_mission_control,
     get_all_leads,
     get_due_followups,
     get_last_db_error,
@@ -59,6 +61,7 @@ def check_auth():
         st.stop()
 
 check_auth()
+ensure_schema()
 
 # ── AUTO PROCESS QUEUE (runs every page load) ─────────────────────────────────
 if "last_queue_check" not in st.session_state:
@@ -79,6 +82,7 @@ due_followups = get_due_followups()
 reactivation_due = get_reactivation_due()
 statuses = get_setting("statuses", [])
 status_color_map = {s["label"]: s["color"] for s in statuses} if statuses else {}
+mission = get_mission_control()
 
 # ── SIDEBAR ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -118,14 +122,86 @@ with st.sidebar:
         st.warning("数据库暂不可用，当前显示为空数据。请检查 Supabase Secrets。")
 
 # ── HEADER ────────────────────────────────────────────────────────────────────
-st.markdown("## 📊 总览仪表盘")
+st.markdown("## Mission Control / 今日工作台")
 if not has_db_config():
     st.warning("数据库未配置：请在 Streamlit Secrets 中添加 `[supabase]` 的连接信息。")
 elif get_last_db_error():
     st.warning("数据库连接失败，页面已进入空数据模式。修复连接后刷新即可恢复。")
 
-if due_followups:
-    st.warning(f"⏰ **今日有 {len(due_followups)} 家客户需要跟进** — 前往「跟进管理」处理", icon="📋")
+campaign = mission.get("campaign") or {}
+metrics = mission.get("metrics") or {}
+judgement = mission.get("judgement") or {}
+
+st.markdown(f"**当前优先 Campaign：** {campaign.get('campaign_name', '未创建')}")
+st.caption(campaign.get("target_segment", ""))
+
+task_cols = st.columns(6)
+task_cards = [
+    ("候选待审核", len(mission.get("candidate_reviews", []))),
+    ("邮件待审核", len(mission.get("email_reviews", []))),
+    ("今日跟进", len(mission.get("due_followups", []))),
+    ("回复待判断", len(mission.get("reply_reviews", []))),
+    ("队列待发", len(mission.get("pending_queue", []))),
+    ("Campaign已发送", metrics.get("sent", 0)),
+]
+for col, (label, value) in zip(task_cols, task_cards):
+    with col:
+        st.metric(label, value)
+
+st.markdown("#### AI 今日建议")
+st.info(
+    f"判断：{judgement.get('decision', '暂无')} | "
+    f"瓶颈：{judgement.get('bottleneck', '暂无')} | "
+    f"置信度：{judgement.get('confidence', '低')}\n\n"
+    f"下一步：{judgement.get('next_action', '先补齐配置并产生真实发送数据。')}"
+)
+
+with st.expander("判断依据", expanded=False):
+    for item in judgement.get("evidence", []):
+        st.markdown(f"- {item}")
+    if judgement.get("risk"):
+        st.warning(judgement["risk"])
+
+st.markdown("---")
+col_work1, col_work2 = st.columns(2)
+with col_work1:
+    st.markdown("#### 待审核候选客户")
+    candidate_reviews = mission.get("candidate_reviews", [])
+    if candidate_reviews:
+        for item in candidate_reviews[:8]:
+            st.markdown(f"- **{item.get('title','')}** — {item.get('summary','')}")
+        st.caption("去 Review Queue 批量处理。")
+    else:
+        st.info("暂无待审核候选。先去客户搜索导入/搜索候选客户。")
+
+    st.markdown("#### 待审核开发信/跟进信")
+    email_reviews = mission.get("email_reviews", [])
+    if email_reviews:
+        for item in email_reviews[:8]:
+            st.markdown(f"- **{item.get('title','')}** — {item.get('summary','')}")
+    else:
+        st.info("暂无待审核邮件。")
+
+with col_work2:
+    st.markdown("#### 今日到期跟进")
+    if due_followups:
+        for lead in due_followups[:10]:
+            st.markdown(f"- **{lead['company_name']}** / {lead.get('contact_name','')} / touch {lead.get('touch_count',0)}")
+    else:
+        st.info("今日无到期跟进。")
+
+    st.markdown("#### 当前 Campaign 核心数据")
+    metric_cols = st.columns(3)
+    metric_cols[0].metric("候选", metrics.get("candidates", 0))
+    metric_cols[1].metric("合格", metrics.get("qualified", 0))
+    metric_cols[2].metric("回复率", f"{metrics.get('reply_rate', 0)}%")
+    metric_cols2 = st.columns(3)
+    metric_cols2[0].metric("退信率", f"{metrics.get('bounce_rate', 0)}%")
+    metric_cols2[1].metric("正向回复率", f"{metrics.get('positive_reply_rate', 0)}%")
+    metric_cols2[2].metric("待人工处理", metrics.get("pending_reviews", 0))
+
+st.markdown("---")
+st.markdown("## 📊 总览仪表盘")
 
 # ── KPI CARDS ─────────────────────────────────────────────────────────────────
 col1, col2, col3, col4, col5, col6 = st.columns(6)

@@ -128,7 +128,7 @@ with tab1:
 
                         col_sub1, col_sub2 = st.columns(2)
                         with col_sub1:
-                            submitted = st.form_submit_button("📬 排入队列", type="primary",
+                            submitted = st.form_submit_button("📬 提交审核", type="primary",
                                                               disabled=bool(errors))
                         with col_sub2:
                             adjust_date = st.form_submit_button("📅 调整跟进日期")
@@ -142,7 +142,7 @@ with tab1:
                                 lead['email'], lead.get('contact_name',''),
                                 subject_edit, body_edit, state
                             )
-                            st.success(f"✅ 已排入队列 | 发送时间：{job['scheduled_local']}")
+                            st.success(f"已提交到队列，需在 Review Queue 批准后才会发送。预定时间：{job['scheduled_local']}")
 
                 # Adjust dates outside form
                 with st.expander("📅 调整跟进日期"):

@@ -49,6 +49,21 @@ def get_setting(key, default=None):
     return rows[0]['value'] if rows else default
 
 
+def get_campaign(campaign_id):
+    rows = sb_request('GET', 'campaigns', params={'id': f'eq.{campaign_id}', 'select': 'daily_send_limit,status'})
+    return rows[0] if rows else {}
+
+
+def get_sent_count_today(campaign_id):
+    today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
+    rows = sb_request('GET', 'email_history', params={
+        'campaign_id': f'eq.{campaign_id}',
+        'sent_at': f'gte.{today}T00:00:00Z',
+        'select': 'id',
+    })
+    return len(rows)
+
+
 def get_signature():
     sig = get_setting('sender_signature', '')
     return sig if isinstance(sig, str) else ''
@@ -101,8 +116,26 @@ def main():
         return
 
     sent_count = failed_count = 0
+    campaign_sent_cache = {}
+    campaign_limit_cache = {}
 
     for job in jobs:
+        if job.get('requires_approval') and not job.get('approved_at'):
+            print(f"Skipped unapproved job: {job.get('company_name')} -> {job.get('to_email')}")
+            continue
+        campaign_id = job.get('campaign_id')
+        if campaign_id:
+            if campaign_id not in campaign_sent_cache:
+                campaign_sent_cache[campaign_id] = get_sent_count_today(campaign_id)
+            if campaign_id not in campaign_limit_cache:
+                campaign = get_campaign(campaign_id)
+                if campaign.get('status') == 'paused':
+                    print(f"Skipped paused campaign job: {job.get('company_name')}")
+                    continue
+                campaign_limit_cache[campaign_id] = int(campaign.get('daily_send_limit') or 10)
+            if campaign_sent_cache[campaign_id] >= campaign_limit_cache[campaign_id]:
+                print(f"Skipped daily limit: campaign {campaign_id}")
+                continue
         try:
             send_email(job['to_email'], job['to_name'] or '',
                       job['subject'], job['body'], signature)
@@ -135,6 +168,7 @@ def main():
             # Record history
             sb_request('POST', 'email_history', data={
                 'lead_id': lead_id,
+                'campaign_id': job.get('campaign_id'),
                 'company_name': job['company_name'],
                 'to_email': job['to_email'],
                 'to_name': job['to_name'],
@@ -145,10 +179,14 @@ def main():
                 'recipient_tz': job.get('recipient_tz'),
                 'sent_at': now_iso,
                 'queue_id': job['queue_id'],
+                'template_id': job.get('template_id'),
+                'touch_number': job.get('touch_number'),
             })
 
             print(f"✅ Sent: {job['company_name']} → {job['to_email']}")
             sent_count += 1
+            if campaign_id:
+                campaign_sent_cache[campaign_id] = campaign_sent_cache.get(campaign_id, 0) + 1
 
         except Exception as e:
             sb_request('PATCH', f"email_queue?id=eq.{job['id']}", data={

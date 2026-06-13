@@ -152,7 +152,7 @@ with tab_compose:
     errors = validate_content(subject, body) if (subject and body) else ['内容为空']
 
     with col_q:
-        if st.button("📬 排入定时队列", type="primary", disabled=bool(errors),
+        if st.button("📬 提交到待发送队列（需审核）", type="primary", disabled=bool(errors),
                      use_container_width=True):
             if lead_id:
                 job = queue_email(lead_id, company, to_email, to_name or contact_name,
@@ -176,9 +176,10 @@ with tab_compose:
                     'scheduled_utc': sched_utc,
                     'scheduled_local': local_time.strftime('%Y-%m-%d %H:%M %Z'),
                     'status': 'pending',
+                    'requires_approval': True,
                 }
                 add_to_queue(job)
-            st.success(f"✅ 已排入队列！发送时间：{job['scheduled_local']}")
+            st.success(f"已提交到队列，需在 Review Queue 批准后才会发送。预定时间：{job['scheduled_local']}")
 
     with col_s:
         if st.button("💾 保存为模板", disabled=bool(errors), use_container_width=True):
