@@ -30,6 +30,9 @@ DEFAULT_STATS = {
 }
 
 LAST_DB_ERROR_KEY = "_db_last_error"
+SCHEMA_VERSION_KEY = "schema_version"
+SCHEMA_VERSION_VALUE = "campaign_growth_v1"
+_SCHEMA_READY = False
 
 
 def _secret_section(name: str) -> dict[str, Any]:
@@ -49,6 +52,7 @@ def _read_db_config() -> dict[str, Any]:
         "dbname": db.get("db_name") or db.get("dbname") or os.getenv("SUPABASE_DB_NAME") or os.getenv("PGDATABASE") or "postgres",
         "user": db.get("db_user") or db.get("user") or os.getenv("SUPABASE_DB_USER") or os.getenv("PGUSER") or "postgres",
         "password": db.get("db_password") or db.get("password") or os.getenv("SUPABASE_DB_PASSWORD") or os.getenv("PGPASSWORD"),
+        "sslmode": db.get("sslmode") or os.getenv("PGSSLMODE") or "require",
     }
     database_url = db.get("database_url") or os.getenv("DATABASE_URL")
     legacy_url = db.get("url")
@@ -110,6 +114,7 @@ def get_conn():
                 dbname=config["dbname"],
                 user=config["user"],
                 password=config["password"],
+                sslmode=config["sslmode"],
                 connect_timeout=10,
             )
         else:
@@ -549,10 +554,41 @@ def _add_column_if_missing(table: str, column_sql: str) -> bool:
     return _execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column_sql}")
 
 
+def _schema_marker_is_current(cur) -> bool:
+    cur.execute("SELECT to_regclass('settings')")
+    if cur.fetchone()[0] is None:
+        return False
+    cur.execute("SELECT value FROM settings WHERE key=%s", (SCHEMA_VERSION_KEY,))
+    row = cur.fetchone()
+    if not row:
+        return False
+    value = row[0]
+    if isinstance(value, dict):
+        return value.get("version") == SCHEMA_VERSION_VALUE
+    return value == SCHEMA_VERSION_VALUE
+
+
 def ensure_schema() -> bool:
     """Create the campaign/review foundation and non-destructive legacy columns."""
+    global _SCHEMA_READY
+    if _SCHEMA_READY:
+        return True
     try:
         with db_cursor() as (conn, cur):
+            cur.execute(
+                """
+                SELECT
+                    to_regclass('settings') IS NOT NULL
+                    AND to_regclass('campaigns') IS NOT NULL
+                    AND to_regclass('review_queue') IS NOT NULL
+                    AND to_regclass('campaign_reviews') IS NOT NULL
+                """
+            )
+            if cur.fetchone()[0] and _schema_marker_is_current(cur):
+                _SCHEMA_READY = True
+                clear_db_error()
+                return True
+
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS settings (
@@ -745,58 +781,69 @@ def ensure_schema() -> bool:
                 )
                 """
             )
+            legacy_columns = {
+                "leads": [
+                    "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
+                    "lead_source TEXT",
+                    "qualification_status TEXT DEFAULT 'unreviewed'",
+                    "positive_reply BOOLEAN DEFAULT FALSE",
+                    "opportunity_status TEXT",
+                    "customer_type TEXT",
+                    "email_quality TEXT",
+                    "last_reply_at TIMESTAMPTZ",
+                ],
+                "discovery_queue": [
+                    "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
+                    "score INTEGER DEFAULT 0",
+                    "score_grade TEXT DEFAULT 'C'",
+                    "score_reason JSONB DEFAULT '{}'::jsonb",
+                    "review_decision TEXT",
+                    "reviewed_at TIMESTAMPTZ",
+                ],
+                "email_queue": [
+                    "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
+                    "requires_approval BOOLEAN DEFAULT TRUE",
+                    "approved_at TIMESTAMPTZ",
+                    "template_id INTEGER",
+                    "touch_number INTEGER DEFAULT 1",
+                ],
+                "templates": [
+                    "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
+                    "template_group TEXT",
+                    "version INTEGER DEFAULT 1",
+                    "enabled BOOLEAN DEFAULT TRUE",
+                    "positive_reply_count INTEGER DEFAULT 0",
+                    "customer_type TEXT",
+                    "hook TEXT",
+                    "reply_count INTEGER DEFAULT 0",
+                    "reply_rate NUMERIC DEFAULT 0",
+                    "use_count INTEGER DEFAULT 0",
+                    "is_high_performer BOOLEAN DEFAULT FALSE",
+                ],
+                "email_history": [
+                    "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
+                    "template_id INTEGER",
+                    "touch_number INTEGER",
+                ],
+            }
+            for table, columns in legacy_columns.items():
+                cur.execute("SELECT to_regclass(%s)", (table,))
+                if cur.fetchone()[0] is None:
+                    continue
+                for column_sql in columns:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column_sql}")
+            cur.execute(
+                """
+                INSERT INTO settings (key, value)
+                VALUES (%s, %s::jsonb)
+                ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value, updated_at=NOW()
+                """,
+                (SCHEMA_VERSION_KEY, json.dumps({"version": SCHEMA_VERSION_VALUE})),
+            )
             conn.commit()
 
-        legacy_columns = {
-            "leads": [
-                "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
-                "lead_source TEXT",
-                "qualification_status TEXT DEFAULT 'unreviewed'",
-                "positive_reply BOOLEAN DEFAULT FALSE",
-                "opportunity_status TEXT",
-                "customer_type TEXT",
-                "email_quality TEXT",
-                "last_reply_at TIMESTAMPTZ",
-            ],
-            "discovery_queue": [
-                "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
-                "score INTEGER DEFAULT 0",
-                "score_grade TEXT DEFAULT 'C'",
-                "score_reason JSONB DEFAULT '{}'::jsonb",
-                "review_decision TEXT",
-                "reviewed_at TIMESTAMPTZ",
-            ],
-            "email_queue": [
-                "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
-                "requires_approval BOOLEAN DEFAULT TRUE",
-                "approved_at TIMESTAMPTZ",
-                "template_id INTEGER",
-                "touch_number INTEGER DEFAULT 1",
-            ],
-            "templates": [
-                "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
-                "template_group TEXT",
-                "version INTEGER DEFAULT 1",
-                "enabled BOOLEAN DEFAULT TRUE",
-                "positive_reply_count INTEGER DEFAULT 0",
-                "customer_type TEXT",
-                "hook TEXT",
-                "reply_count INTEGER DEFAULT 0",
-                "reply_rate NUMERIC DEFAULT 0",
-                "use_count INTEGER DEFAULT 0",
-                "is_high_performer BOOLEAN DEFAULT FALSE",
-            ],
-            "email_history": [
-                "campaign_id INTEGER REFERENCES campaigns(id) ON DELETE SET NULL",
-                "template_id INTEGER",
-                "touch_number INTEGER",
-            ],
-        }
-        for table, columns in legacy_columns.items():
-            for column_sql in columns:
-                _add_column_if_missing(table, column_sql)
-
         get_or_create_default_campaign()
+        _SCHEMA_READY = True
         return True
     except Exception as exc:
         _set_db_error(exc)
