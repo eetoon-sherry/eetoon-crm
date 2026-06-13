@@ -28,6 +28,21 @@ def _row(name: str, status: str, details: str = "", action: str = "") -> dict[st
     return {"检查项": name, "状态": status, "说明": details, "需要动作": action}
 
 
+def get_db_diagnostics() -> dict[str, str]:
+    config = db._read_db_config()
+    safe = {
+        "host": str(config.get("host") or ""),
+        "port": str(config.get("port") or ""),
+        "dbname": str(config.get("dbname") or ""),
+        "user": str(config.get("user") or ""),
+        "sslmode": str(config.get("sslmode") or ""),
+        "has_password": "yes" if config.get("password") else "no",
+        "has_database_url": "yes" if config.get("dsn") else "no",
+        "last_error": db.get_last_db_error(),
+    }
+    return safe
+
+
 def run_health_checks() -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     db_connected = False
@@ -49,7 +64,7 @@ def run_health_checks() -> list[dict[str, str]]:
         rows.append(_row("Supabase 连接", "正常", "Postgres SELECT 1 成功"))
         db_connected = True
     except Exception as exc:
-        rows.append(_row("Supabase 连接", "失败", str(exc)[:180], "检查 Supabase 数据库密码、host、网络白名单/连接池设置"))
+        rows.append(_row("Supabase 连接", "失败", str(exc)[:500], "检查 Supabase 数据库密码、host、网络白名单/连接池设置"))
 
     if db_connected:
         schema_ok = db.ensure_schema()
@@ -72,7 +87,7 @@ def run_health_checks() -> list[dict[str, str]]:
                 conn.commit()
             rows.append(_row("数据库读写", "正常" if ok else "失败", "settings 临时写入/读取/删除测试"))
         except Exception as exc:
-            rows.append(_row("数据库读写", "失败", str(exc)[:180], "检查数据库权限和 settings 表"))
+            rows.append(_row("数据库读写", "失败", str(exc)[:500], "检查数据库权限和 settings 表"))
     else:
         rows.append(_row("Campaign schema", "未检查", "Supabase 未连接，无法检查或创建表", "先修复 Streamlit Supabase Secrets"))
         for table in REQUIRED_TABLES:

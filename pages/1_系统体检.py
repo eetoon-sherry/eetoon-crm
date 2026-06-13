@@ -3,7 +3,7 @@
 import pandas as pd
 import streamlit as st
 
-from utils.system_health import run_health_checks, send_test_email
+from utils.system_health import get_db_diagnostics, run_health_checks, send_test_email
 
 
 st.set_page_config(page_title="系统体检 | EETOON CRM", page_icon="🩺", layout="wide")
@@ -20,6 +20,9 @@ if st.button("重新检查", type="primary"):
 
 rows = run_health_checks()
 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+with st.expander("数据库连接诊断（不显示密码）", expanded=True):
+    st.json(get_db_diagnostics())
 
 st.markdown("### SMTP 测试")
 col_email, col_btn = st.columns([2, 1])
