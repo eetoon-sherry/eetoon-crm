@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
@@ -108,7 +109,15 @@ def get_conn():
         if config.get("dsn"):
             conn = psycopg2.connect(config["dsn"], connect_timeout=10)
         elif config.get("host") and config.get("password"):
-            conn = psycopg2.connect(
+            hostaddr = config.get("hostaddr") or os.getenv("PGHOSTADDR")
+            if not hostaddr:
+                try:
+                    ipv4 = socket.getaddrinfo(config["host"], int(config["port"]), socket.AF_INET, socket.SOCK_STREAM)
+                    if ipv4:
+                        hostaddr = ipv4[0][4][0]
+                except Exception:
+                    hostaddr = None
+            connect_kwargs = dict(
                 host=config["host"],
                 port=int(config["port"]),
                 dbname=config["dbname"],
@@ -117,6 +126,9 @@ def get_conn():
                 sslmode=config["sslmode"],
                 connect_timeout=10,
             )
+            if hostaddr:
+                connect_kwargs["hostaddr"] = hostaddr
+            conn = psycopg2.connect(**connect_kwargs)
         else:
             raise RuntimeError(
                 "Database is not configured. Add [supabase] db_host/db_password "
