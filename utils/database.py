@@ -1362,6 +1362,29 @@ def get_review_counts(status: str = "pending", campaign_id: Optional[int] = None
     return {row["item_type"]: int(row["count"]) for row in rows}
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
+def get_candidate_email_counts(campaign_id: Optional[int] = None) -> dict[str, int]:
+    ensure_schema()
+    query = """
+        SELECT
+            COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE COALESCE(email, '') <> '') AS with_email,
+            COUNT(*) FILTER (WHERE COALESCE(email, '') = '') AS missing_email
+        FROM discovery_queue
+        WHERE status='pending_review'
+    """
+    params: tuple[Any, ...] = ()
+    if campaign_id:
+        query += " AND campaign_id=%s"
+        params = (campaign_id,)
+    row = _fetch_one(query, params) or {}
+    return {
+        "total": int(row.get("total") or 0),
+        "with_email": int(row.get("with_email") or 0),
+        "missing_email": int(row.get("missing_email") or 0),
+    }
+
+
 def update_review_item(review_id: int, status: str, payload_update: Optional[dict] = None) -> bool:
     ensure_schema()
     if payload_update:
@@ -1547,6 +1570,7 @@ def get_mission_control() -> dict:
     metrics = get_campaign_metrics(campaign_id)
     due = get_due_followups()
     counts = get_review_counts("pending", campaign_id=campaign_id)
+    candidate_email_counts = get_candidate_email_counts(campaign_id)
     reviews = get_review_queue("pending", campaign_id=campaign_id)
     preview_reviews = reviews[:20]
     queue = get_all_queue()
@@ -1558,6 +1582,7 @@ def get_mission_control() -> dict:
         "metrics": metrics,
         "judgement": judge_campaign_health(metrics),
         "review_counts": counts,
+        "candidate_email_counts": candidate_email_counts,
         "due_followups": due,
         "pending_queue": [q for q in queue if q.get("status") == "pending"],
         "candidate_reviews": candidate_reviews,

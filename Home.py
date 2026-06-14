@@ -135,6 +135,7 @@ campaign = mission.get("campaign") or {}
 metrics = mission.get("metrics") or {}
 judgement = mission.get("judgement") or {}
 review_counts = mission.get("review_counts") or {}
+candidate_email_counts = mission.get("candidate_email_counts") or {}
 
 st.markdown(f"**当前优先 Campaign：** {campaign.get('campaign_name', '未创建')}")
 st.caption(campaign.get("target_segment", ""))
@@ -142,10 +143,10 @@ st.caption(campaign.get("target_segment", ""))
 task_cols = st.columns(6)
 task_cards = [
     ("候选待审核", review_counts.get("candidate_company", len(mission.get("candidate_reviews", [])))),
+    ("待确认邮箱", candidate_email_counts.get("missing_email", 0)),
     ("邮件待审核", review_counts.get("first_email", 0) + review_counts.get("followup_email", 0)),
     ("今日跟进", len(mission.get("due_followups", []))),
     ("回复待判断", review_counts.get("reply", len(mission.get("reply_reviews", [])))),
-    ("队列待发", len(mission.get("pending_queue", []))),
     ("Campaign已发送", metrics.get("sent", 0)),
 ]
 for col, (label, value) in zip(task_cols, task_cards):

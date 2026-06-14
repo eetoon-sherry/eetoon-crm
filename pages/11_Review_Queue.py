@@ -80,6 +80,16 @@ item_type = st.selectbox(
 type_filter = None if item_type[0] == "all" else item_type[0]
 
 items = get_review_queue("pending", item_type=type_filter, campaign_id=campaign_id)
+if item_type[0] == "candidate_company":
+    email_filter = st.radio("邮箱状态", ["全部", "已有邮箱", "缺邮箱"], horizontal=True)
+    if email_filter != "全部":
+        filtered_items = []
+        for item in items:
+            payload = _payload(item)
+            has_email = bool(payload.get("email"))
+            if (email_filter == "已有邮箱" and has_email) or (email_filter == "缺邮箱" and not has_email):
+                filtered_items.append(item)
+        items = filtered_items
 
 if not items:
     st.info("当前没有待审核项目。")
