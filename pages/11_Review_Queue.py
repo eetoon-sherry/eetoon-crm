@@ -99,6 +99,40 @@ st.markdown(f"待审核：**{len(items)}** 项")
 if len(items) > 12:
     st.caption("为保证页面流畅，列表默认收起。展开单条后审核。")
 
+if item_type[0] == "candidate_company":
+    ready_items = [item for item in items if _payload(item).get("email")]
+    if ready_items:
+        with st.form("bulk_approve_ready_candidates"):
+            st.markdown("#### 批量操作")
+            st.caption("只处理当前筛选结果中已有邮箱的候选；不会发送邮件，只会生成首封开发信审核任务。")
+            selected_ids = st.multiselect(
+                "选择要进入开发流程的候选",
+                ready_items,
+                default=ready_items[: min(10, len(ready_items))],
+                format_func=lambda item: f"#{item.get('id')} {item.get('title')} | {_payload(item).get('email', '')}",
+            )
+            submitted = st.form_submit_button("批量通过，生成首封邮件审核任务", type="primary")
+            if submitted:
+                created = 0
+                failed = 0
+                for item in selected_ids:
+                    payload = _payload(item)
+                    lead_id = approve_candidate_review(
+                        item["id"],
+                        payload.get("contact_name") or payload.get("owner_name") or "",
+                        payload.get("email", ""),
+                        payload.get("company_size", ""),
+                    )
+                    if lead_id:
+                        created += 1
+                    else:
+                        failed += 1
+                if created:
+                    st.success(f"已创建 {created} 个客户，并生成首封邮件审核任务。")
+                if failed:
+                    st.warning(f"{failed} 个候选未能创建，通常是邮箱重复或数据缺失。")
+                st.rerun()
+
 for idx, item in enumerate(items):
     payload = _payload(item)
     label = f"#{item.get('id')} | {item.get('item_type')} | {item.get('title')}"
