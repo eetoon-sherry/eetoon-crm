@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import os
 import socket
+from urllib.parse import urlparse
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
 
 import psycopg2
 import psycopg2.extras
+import psycopg2.pool
 import streamlit as st
 from utils.timezone import beijing_today
 
@@ -38,6 +40,10 @@ _SCHEMA_READY = False
 PROJECT_REF = "gnqddnujljyqjsfjrrri"
 DEFAULT_POOLER_HOST = "aws-1-ap-southeast-1.pooler.supabase.com"
 DEFAULT_POOLER_PORT = 6543
+_POOL = None
+_POOL_KEY = None
+_BORROWED_CONN_IDS: set[int] = set()
+READ_CACHE_TTL = 20
 
 
 def _secret_section(name: str) -> dict[str, Any]:
@@ -106,6 +112,13 @@ def _set_db_error(exc: Exception) -> None:
         pass
 
 
+def _clear_read_cache() -> None:
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+
+
 def clear_db_error() -> None:
     try:
         st.session_state.pop(LAST_DB_ERROR_KEY, None)
@@ -125,7 +138,7 @@ def has_db_config() -> bool:
     return bool(config.get("dsn") or (config.get("host") and config.get("password")))
 
 
-def _connect_with_config(config: dict[str, Any], *, use_hostaddr: bool = True):
+def _connect_kwargs(config: dict[str, Any], *, use_hostaddr: bool = True) -> dict[str, Any]:
     hostaddr = config.get("hostaddr")
     if use_hostaddr and not hostaddr:
         try:
@@ -135,7 +148,7 @@ def _connect_with_config(config: dict[str, Any], *, use_hostaddr: bool = True):
         except Exception:
             hostaddr = None
 
-    connect_kwargs = dict(
+    kwargs = dict(
         host=config["host"],
         port=int(config["port"]),
         dbname=config["dbname"],
@@ -145,8 +158,12 @@ def _connect_with_config(config: dict[str, Any], *, use_hostaddr: bool = True):
         connect_timeout=10,
     )
     if use_hostaddr and hostaddr:
-        connect_kwargs["hostaddr"] = hostaddr
-    return psycopg2.connect(**connect_kwargs)
+        kwargs["hostaddr"] = hostaddr
+    return kwargs
+
+
+def _connect_with_config(config: dict[str, Any], *, use_hostaddr: bool = True):
+    return psycopg2.connect(**_connect_kwargs(config, use_hostaddr=use_hostaddr))
 
 
 def _pooler_config(config: dict[str, Any]) -> Optional[dict[str, Any]]:
@@ -169,45 +186,100 @@ def _pooler_config(config: dict[str, Any]) -> Optional[dict[str, Any]]:
     }
 
 
+def _connection_attempts(config: dict[str, Any]) -> list[tuple[dict[str, Any], bool]]:
+    pooler = _pooler_config(config)
+    if config.get("prefer_pooler") and pooler:
+        return [(pooler, False), (config, True)]
+    attempts = [(config, True)]
+    if pooler:
+        attempts.append((pooler, False))
+    return attempts
+
+
+def _pool_key(connect_kwargs: dict[str, Any]) -> tuple:
+    return tuple(sorted((k, v) for k, v in connect_kwargs.items()))
+
+
+def _close_pool() -> None:
+    global _POOL, _POOL_KEY, _BORROWED_CONN_IDS
+    if _POOL:
+        try:
+            _POOL.closeall()
+        except Exception:
+            pass
+    _POOL = None
+    _POOL_KEY = None
+    _BORROWED_CONN_IDS = set()
+
+
+def _get_pool():
+    global _POOL, _POOL_KEY
+    config = _read_db_config()
+    if config.get("dsn"):
+        key = ("dsn", config["dsn"])
+        if _POOL and _POOL_KEY == key:
+            return _POOL
+        _close_pool()
+        _POOL = psycopg2.pool.SimpleConnectionPool(1, 5, config["dsn"], connect_timeout=10)
+        _POOL_KEY = key
+        return _POOL
+
+    if not (config.get("host") and config.get("password")):
+        raise RuntimeError(
+            "Database is not configured. Add [supabase] db_host/db_password "
+            "or DATABASE_URL in Streamlit Secrets."
+        )
+
+    last_exc = None
+    for attempt_config, use_hostaddr in _connection_attempts(config):
+        try:
+            kwargs = _connect_kwargs(attempt_config, use_hostaddr=use_hostaddr)
+            key = _pool_key(kwargs)
+            if _POOL and _POOL_KEY == key:
+                return _POOL
+            _close_pool()
+            _POOL = psycopg2.pool.SimpleConnectionPool(1, 5, **kwargs)
+            _POOL_KEY = key
+            return _POOL
+        except Exception as exc:
+            last_exc = exc
+            _close_pool()
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Database connection failed.")
+
+
 def get_conn():
     """Create a PostgreSQL connection.
 
     Raises RuntimeError with a safe message when configuration is missing.
     """
-    config = _read_db_config()
     try:
-        if config.get("dsn"):
-            conn = psycopg2.connect(config["dsn"], connect_timeout=10)
-        elif config.get("host") and config.get("password"):
-            pooler = _pooler_config(config)
-            if config.get("prefer_pooler") and pooler:
-                try:
-                    conn = _connect_with_config(pooler, use_hostaddr=False)
-                except Exception as pooler_exc:
-                    try:
-                        conn = _connect_with_config(config)
-                    except Exception:
-                        raise pooler_exc
-            else:
-                try:
-                    conn = _connect_with_config(config)
-                except Exception as direct_exc:
-                    if not pooler:
-                        raise
-                    try:
-                        conn = _connect_with_config(pooler, use_hostaddr=False)
-                    except Exception:
-                        raise direct_exc
-        else:
-            raise RuntimeError(
-                "Database is not configured. Add [supabase] db_host/db_password "
-                "or DATABASE_URL in Streamlit Secrets."
-            )
+        pool = _get_pool()
+        conn = pool.getconn()
+        _BORROWED_CONN_IDS.add(id(conn))
         clear_db_error()
         return conn
     except Exception as exc:
         _set_db_error(exc)
         raise
+
+
+def release_conn(conn) -> None:
+    if conn is None:
+        return
+    global _POOL
+    if _POOL and id(conn) in _BORROWED_CONN_IDS:
+        _BORROWED_CONN_IDS.discard(id(conn))
+        try:
+            _POOL.putconn(conn)
+            return
+        except Exception:
+            _close_pool()
+    try:
+        conn.close()
+    except Exception:
+        pass
 
 
 @contextmanager
@@ -217,9 +289,15 @@ def db_cursor(dict_rows: bool = False):
     cur = conn.cursor(cursor_factory=cursor_factory)
     try:
         yield conn, cur
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         cur.close()
-        conn.close()
+        release_conn(conn)
 
 
 def _fetch_all(query: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:
@@ -248,6 +326,7 @@ def _execute(query: str, params: tuple[Any, ...] = ()) -> bool:
         with db_cursor() as (conn, cur):
             cur.execute(query, params)
             conn.commit()
+        _clear_read_cache()
         return True
     except Exception as exc:
         _set_db_error(exc)
@@ -273,6 +352,7 @@ def _insert(table: str, data: dict[str, Any], returning: Optional[str] = None) -
             cur.execute(query, tuple(_adapt_value(data[col]) for col in cols))
             value = cur.fetchone()[0] if returning else True
             conn.commit()
+            _clear_read_cache()
             return value
     except psycopg2.errors.UniqueViolation as exc:
         _set_db_error(exc)
@@ -282,6 +362,7 @@ def _insert(table: str, data: dict[str, Any], returning: Optional[str] = None) -
         return None if returning else False
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_setting(key: str, default=None):
     row = _fetch_one("SELECT value FROM settings WHERE key = %s", (key,))
     return row["value"] if row else default
@@ -295,6 +376,7 @@ def set_setting(key: str, value) -> bool:
     )
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_all_leads(status_filter=None):
     if status_filter:
         return _fetch_all(
@@ -304,6 +386,7 @@ def get_all_leads(status_filter=None):
     return _fetch_all("SELECT * FROM leads ORDER BY score DESC, created_at DESC")
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_lead(lead_id: int):
     return _fetch_one("SELECT * FROM leads WHERE id = %s", (lead_id,))
 
@@ -346,6 +429,7 @@ def add_lead(data: dict) -> Optional[int]:
     return _insert("leads", data, returning="id")
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_email_history(lead_id: int):
     return _fetch_all(
         "SELECT * FROM email_history WHERE lead_id = %s ORDER BY sent_at DESC",
@@ -357,6 +441,7 @@ def add_email_history(data: dict) -> bool:
     return bool(_insert("email_history", data))
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_pending_queue():
     ensure_schema()
     return _fetch_all(
@@ -369,6 +454,7 @@ def get_pending_queue():
     )
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_all_queue():
     ensure_schema()
     return _fetch_all("SELECT * FROM email_queue ORDER BY queued_at DESC LIMIT 100")
@@ -403,6 +489,7 @@ def update_queue_status(queue_id: str, status: str, error: str = None) -> bool:
     return False
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_due_followups(check_date=None):
     check_date = check_date or beijing_today()
     return _fetch_all(
@@ -421,6 +508,7 @@ def get_due_followups(check_date=None):
     )
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_reactivation_due(check_date=None):
     check_date = check_date or beijing_today()
     return _fetch_all(
@@ -441,6 +529,7 @@ def add_note(lead_id: int, note_type: str, content: str) -> bool:
     )
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_notes(lead_id: int):
     return _fetch_all(
         "SELECT * FROM followup_notes WHERE lead_id = %s ORDER BY created_at DESC",
@@ -448,6 +537,7 @@ def get_notes(lead_id: int):
     )
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_templates(category=None, touch_number=None):
     ensure_schema()
     query = "SELECT * FROM templates WHERE 1=1"
@@ -462,6 +552,7 @@ def get_templates(category=None, touch_number=None):
     return _fetch_all(query, tuple(params))
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_templates_for_campaign(campaign_id: Optional[int] = None, category=None, touch_number=None):
     ensure_schema()
     query = "SELECT * FROM templates WHERE 1=1"
@@ -484,32 +575,30 @@ def add_template(data: dict) -> bool:
     return bool(_insert("templates", data))
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_stats():
     try:
-        with db_cursor() as (_, cur):
-            stats = {}
-            cur.execute("SELECT COUNT(*) FROM leads")
-            stats["total"] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM leads WHERE status LIKE '已发送%'")
-            stats["active"] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM leads WHERE status = '有回复'")
-            stats["replied"] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM leads WHERE status = '冷静期-90天后重新激活'")
-            stats["cold"] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM leads WHERE status = '无意向'")
-            stats["no_interest"] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM leads WHERE status = '退信'")
-            stats["bounced"] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM email_queue WHERE status = 'pending'")
-            stats["pending_emails"] = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM email_history")
-            stats["total_sent"] = cur.fetchone()[0]
-            return stats
+        with db_cursor(dict_rows=True) as (_, cur):
+            cur.execute(
+                """
+                SELECT
+                    (SELECT COUNT(*) FROM leads) AS total,
+                    (SELECT COUNT(*) FROM leads WHERE status LIKE '已发送%%') AS active,
+                    (SELECT COUNT(*) FROM leads WHERE status = '有回复') AS replied,
+                    (SELECT COUNT(*) FROM leads WHERE status = '冷静期-90天后重新激活') AS cold,
+                    (SELECT COUNT(*) FROM leads WHERE status = '无意向') AS no_interest,
+                    (SELECT COUNT(*) FROM leads WHERE status = '退信') AS bounced,
+                    (SELECT COUNT(*) FROM email_queue WHERE status = 'pending') AS pending_emails,
+                    (SELECT COUNT(*) FROM email_history) AS total_sent
+                """
+            )
+            return dict(cur.fetchone())
     except Exception as exc:
         _set_db_error(exc)
         return DEFAULT_STATS.copy()
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_discovery_queue(status="pending_review"):
     return _fetch_all(
         "SELECT * FROM discovery_queue WHERE status = %s ORDER BY found_at DESC",
@@ -528,6 +617,7 @@ def update_discovery_status(candidate_id: int, status: str) -> bool:
     )
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_email_history_daily(limit: int = 30):
     return _fetch_all(
         """
@@ -542,6 +632,7 @@ def get_email_history_daily(limit: int = 30):
     )
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_sent_count_today(campaign_id: Optional[int] = None) -> int:
     ensure_schema()
     today = beijing_today()
@@ -931,6 +1022,7 @@ def ensure_schema() -> bool:
         return False
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_campaigns(status: Optional[str] = None):
     ensure_schema()
     if status:
@@ -938,16 +1030,19 @@ def get_campaigns(status: Optional[str] = None):
     return _fetch_all("SELECT * FROM campaigns ORDER BY created_at DESC")
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_campaign(campaign_id: int):
     ensure_schema()
     return _fetch_one("SELECT * FROM campaigns WHERE id=%s", (campaign_id,))
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_campaign_by_name(campaign_name: str):
     ensure_schema()
     return _fetch_one("SELECT * FROM campaigns WHERE campaign_name=%s", (campaign_name,))
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_or_create_default_campaign():
     ensure_schema_without_default = getattr(get_or_create_default_campaign, "_in_progress", False)
     if ensure_schema_without_default:
@@ -1079,6 +1174,60 @@ def _as_text_blob(candidate: dict) -> str:
     return " ".join(str(p) for p in parts if p).lower()
 
 
+def _normalize_website(url: str) -> str:
+    if not url:
+        return ""
+    raw = str(url).strip()
+    if not raw:
+        return ""
+    if "://" not in raw:
+        raw = f"https://{raw}"
+    parsed = urlparse(raw)
+    host = (parsed.netloc or parsed.path).lower()
+    if host.startswith("www."):
+        host = host[4:]
+    return host.rstrip("/")
+
+
+def candidate_exists(company_name: str = "", website: str = "") -> bool:
+    normalized_site = _normalize_website(website)
+    normalized_name = str(company_name or "").strip().lower()
+    if not normalized_site and not normalized_name:
+        return False
+    try:
+        with db_cursor() as (_, cur):
+            if normalized_site:
+                pattern = f"%{normalized_site}%"
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM discovery_queue WHERE LOWER(COALESCE(website,'')) LIKE %s
+                        UNION ALL
+                        SELECT 1 FROM leads WHERE LOWER(COALESCE(website,'')) LIKE %s
+                    )
+                    """,
+                    (pattern, pattern),
+                )
+                if cur.fetchone()[0]:
+                    return True
+            if normalized_name:
+                cur.execute(
+                    """
+                    SELECT EXISTS (
+                        SELECT 1 FROM discovery_queue WHERE LOWER(TRIM(COALESCE(company_name,''))) = %s
+                        UNION ALL
+                        SELECT 1 FROM leads WHERE LOWER(TRIM(COALESCE(company_name,''))) = %s
+                    )
+                    """,
+                    (normalized_name, normalized_name),
+                )
+                return bool(cur.fetchone()[0])
+    except Exception as exc:
+        _set_db_error(exc)
+        return False
+    return False
+
+
 def score_candidate(candidate: dict, campaign: Optional[dict] = None) -> dict:
     campaign = campaign or DEFAULT_CAMPAIGN
     text = _as_text_blob(candidate)
@@ -1130,6 +1279,8 @@ def score_candidate(candidate: dict, campaign: Optional[dict] = None) -> dict:
 
 def add_discovery_candidate_for_campaign(data: dict, campaign_id: Optional[int] = None) -> bool:
     ensure_schema()
+    if candidate_exists(data.get("company_name", ""), data.get("website", "")):
+        return False
     campaign = get_campaign(campaign_id) if campaign_id else get_or_create_default_campaign()
     score = score_candidate(data, campaign)
     payload = {
@@ -1180,6 +1331,7 @@ def create_review_item(campaign_id: Optional[int], item_type: str, item_id: Opti
         return None
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_review_queue(status: str = "pending", item_type: Optional[str] = None, campaign_id: Optional[int] = None):
     ensure_schema()
     query = "SELECT rq.*, c.campaign_name FROM review_queue rq LEFT JOIN campaigns c ON c.id=rq.campaign_id WHERE rq.status=%s"
@@ -1264,6 +1416,7 @@ def approve_candidate_review(review_id: int, contact_name: str = "", email: str 
     return lead_id
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_campaign_metrics(campaign_id: Optional[int] = None) -> dict:
     ensure_schema()
     campaign_filter = "WHERE campaign_id=%s" if campaign_id else ""
@@ -1370,6 +1523,7 @@ def judge_campaign_health(metrics: dict) -> dict:
     }
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
 def get_mission_control() -> dict:
     ensure_schema()
     campaign = get_or_create_default_campaign()
