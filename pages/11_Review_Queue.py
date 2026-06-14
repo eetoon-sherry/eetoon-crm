@@ -60,6 +60,29 @@ def _has_email(item) -> bool:
     return bool(str(payload.get("email") or "").strip())
 
 
+def _brief(payload: dict) -> dict:
+    brief = payload.get("research_brief") or {}
+    if isinstance(brief, str):
+        try:
+            brief = json.loads(brief)
+        except Exception:
+            brief = {}
+    return brief if isinstance(brief, dict) else {}
+
+
+def _as_list(value) -> list:
+    if isinstance(value, list):
+        return [str(v) for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _short_list(value, limit: int = 3) -> str:
+    items = _as_list(value)
+    return ", ".join(items[:limit])
+
+
 def _item_label(item) -> str:
     payload = _payload(item)
     email = payload.get("email") or "缺邮箱"
@@ -71,6 +94,7 @@ def _summary_rows(items):
     rows = []
     for item in items:
         payload = _payload(item)
+        brief = _brief(payload)
         rows.append({
             "ID": item.get("id"),
             "类型": item.get("item_type"),
@@ -78,9 +102,68 @@ def _summary_rows(items):
             "评分": f"{payload.get('score_grade', '')} {payload.get('score', '')}".strip(),
             "邮箱": payload.get("email") or "",
             "地区": payload.get("location") or "",
+            "客户类型": brief.get("company_type") or brief.get("customer_type") or "",
+            "规模线索": payload.get("company_size") or brief.get("size_estimate") or "",
+            "ICP适配": brief.get("icp_fit") or "",
+            "包袋信号": _short_list(brief.get("bag_signals") or brief.get("signals")),
             "官网": payload.get("website") or "",
         })
     return rows
+
+
+def _render_list(title: str, value, empty: str = "暂无"):
+    items = _as_list(value)
+    st.markdown(f"**{title}**")
+    if items:
+        for item in items:
+            st.markdown(f"- {item}")
+    else:
+        st.caption(empty)
+
+
+def _render_research_card(payload: dict):
+    brief = _brief(payload)
+    if not brief:
+        st.warning("这条候选还没有完整背调。需要重新背调后再判断。")
+        return
+
+    st.markdown("#### 背调判断")
+    cols = st.columns(4)
+    cols[0].metric("客户类型", brief.get("company_type") or brief.get("customer_type") or "未判断")
+    cols[1].metric("规模线索", payload.get("company_size") or brief.get("size_estimate") or "未知")
+    cols[2].metric("ICP适配", brief.get("icp_fit") or "未知")
+    contact = brief.get("contact") or {}
+    if not isinstance(contact, dict):
+        contact = {}
+    cols[3].metric("邮箱可信度", contact.get("confidence") or ("有邮箱" if payload.get("email") else "缺邮箱"))
+
+    if brief.get("summary"):
+        st.write(brief.get("summary"))
+    elif brief.get("description"):
+        st.write(brief.get("description"))
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        _render_list("产品/服务线索", brief.get("product_lines"))
+        _render_list("包袋需求信号", brief.get("bag_signals") or brief.get("signals"))
+        _render_list("适合当前 Campaign 的理由", brief.get("fit_reasons"))
+    with col_b:
+        _render_list("目标客户/使用场景", brief.get("customer_segments"))
+        _render_list("规模判断依据", brief.get("size_signals"))
+        _render_list("风险/需要确认", brief.get("concerns"))
+
+    if brief.get("recommended_hook") or brief.get("next_action"):
+        st.markdown("#### 建议动作")
+        if brief.get("recommended_hook"):
+            st.info(f"建议 hook：{brief.get('recommended_hook')}")
+        if brief.get("next_action"):
+            st.write(f"下一步：{brief.get('next_action')}")
+
+    evidence_urls = _as_list(brief.get("evidence_urls"))
+    if evidence_urls:
+        with st.expander("证据链接", expanded=False):
+            for url in evidence_urls:
+                st.markdown(f"- {url}")
 
 
 def _render_item(item):
@@ -107,15 +190,7 @@ def _render_item(item):
                 except Exception:
                     reason = {}
             st.write("评分依据：" + ", ".join(reason.get("reasons", [])))
-            brief = payload.get("research_brief") or {}
-            if isinstance(brief, str):
-                try:
-                    brief = json.loads(brief)
-                except Exception:
-                    brief = {}
-            if brief:
-                with st.expander("背调摘要", expanded=False):
-                    st.json(brief)
+            _render_research_card(payload)
         with col_action:
             with st.form(f"candidate_{item['id']}"):
                 contact = st.text_input("联系人", value=payload.get("contact_name") or payload.get("owner_name") or "")
