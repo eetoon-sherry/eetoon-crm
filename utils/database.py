@@ -607,7 +607,14 @@ def get_discovery_queue(status="pending_review"):
 
 
 def add_discovery_candidate(data: dict) -> bool:
-    return bool(_insert("discovery_queue", data))
+    allowed = {
+        "company_name", "website", "location", "email", "owner_name",
+        "contact_name", "company_size", "research_brief",
+        "source", "status", "campaign_id", "score",
+        "score_grade", "score_reason", "review_decision", "reviewed_at",
+    }
+    payload = {key: value for key, value in data.items() if key in allowed}
+    return bool(_insert("discovery_queue", payload))
 
 
 def update_discovery_status(candidate_id: int, status: str) -> bool:
@@ -1200,11 +1207,9 @@ def candidate_exists(company_name: str = "", website: str = "") -> bool:
                 pattern = f"%{normalized_site}%"
                 cur.execute(
                     """
-                    SELECT EXISTS (
-                        SELECT 1 FROM discovery_queue WHERE LOWER(COALESCE(website,'')) LIKE %s
-                        UNION ALL
-                        SELECT 1 FROM leads WHERE LOWER(COALESCE(website,'')) LIKE %s
-                    )
+                    SELECT
+                        EXISTS (SELECT 1 FROM discovery_queue WHERE LOWER(COALESCE(website,'')) LIKE %s)
+                        OR EXISTS (SELECT 1 FROM leads WHERE LOWER(COALESCE(website,'')) LIKE %s)
                     """,
                     (pattern, pattern),
                 )
@@ -1213,11 +1218,9 @@ def candidate_exists(company_name: str = "", website: str = "") -> bool:
             if normalized_name:
                 cur.execute(
                     """
-                    SELECT EXISTS (
-                        SELECT 1 FROM discovery_queue WHERE LOWER(TRIM(COALESCE(company_name,''))) = %s
-                        UNION ALL
-                        SELECT 1 FROM leads WHERE LOWER(TRIM(COALESCE(company_name,''))) = %s
-                    )
+                    SELECT
+                        EXISTS (SELECT 1 FROM discovery_queue WHERE LOWER(TRIM(COALESCE(company_name,''))) = %s)
+                        OR EXISTS (SELECT 1 FROM leads WHERE LOWER(TRIM(COALESCE(company_name,''))) = %s)
                     """,
                     (normalized_name, normalized_name),
                 )
