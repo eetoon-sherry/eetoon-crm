@@ -86,11 +86,14 @@ if not items:
     st.stop()
 
 st.markdown(f"待审核：**{len(items)}** 项")
+if len(items) > 12:
+    st.caption("为保证页面流畅，列表默认收起。展开单条后审核。")
 
-for item in items:
+for idx, item in enumerate(items):
     payload = _payload(item)
     label = f"#{item.get('id')} | {item.get('item_type')} | {item.get('title')}"
-    with st.expander(label, expanded=item.get("priority") == 1):
+    expanded = item.get("priority") == 1 and idx == 0 and len(items) <= 12
+    with st.expander(label, expanded=expanded):
         st.caption(item.get("campaign_name") or "")
         if item.get("summary"):
             st.write(item.get("summary"))

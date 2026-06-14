@@ -1349,6 +1349,19 @@ def get_review_queue(status: str = "pending", item_type: Optional[str] = None, c
     return _fetch_all(query, tuple(params))
 
 
+@st.cache_data(ttl=READ_CACHE_TTL, show_spinner=False)
+def get_review_counts(status: str = "pending", campaign_id: Optional[int] = None) -> dict[str, int]:
+    ensure_schema()
+    query = "SELECT item_type, COUNT(*) AS count FROM review_queue WHERE status=%s"
+    params: list[Any] = [status]
+    if campaign_id:
+        query += " AND campaign_id=%s"
+        params.append(campaign_id)
+    query += " GROUP BY item_type"
+    rows = _fetch_all(query, tuple(params))
+    return {row["item_type"]: int(row["count"]) for row in rows}
+
+
 def update_review_item(review_id: int, status: str, payload_update: Optional[dict] = None) -> bool:
     ensure_schema()
     if payload_update:
@@ -1533,15 +1546,18 @@ def get_mission_control() -> dict:
     campaign_id = campaign.get("id") if campaign else None
     metrics = get_campaign_metrics(campaign_id)
     due = get_due_followups()
-    reviews = get_review_queue("pending", campaign_id=campaign_id)[:20]
+    counts = get_review_counts("pending", campaign_id=campaign_id)
+    reviews = get_review_queue("pending", campaign_id=campaign_id)
+    preview_reviews = reviews[:20]
     queue = get_all_queue()
-    pending_email_reviews = [r for r in reviews if r.get("item_type") in {"first_email", "followup_email"}]
-    candidate_reviews = [r for r in reviews if r.get("item_type") == "candidate_company"]
-    reply_reviews = [r for r in reviews if r.get("item_type") == "reply"]
+    pending_email_reviews = [r for r in preview_reviews if r.get("item_type") in {"first_email", "followup_email"}]
+    candidate_reviews = [r for r in preview_reviews if r.get("item_type") == "candidate_company"]
+    reply_reviews = [r for r in preview_reviews if r.get("item_type") == "reply"]
     return {
         "campaign": campaign,
         "metrics": metrics,
         "judgement": judge_campaign_health(metrics),
+        "review_counts": counts,
         "due_followups": due,
         "pending_queue": [q for q in queue if q.get("status") == "pending"],
         "candidate_reviews": candidate_reviews,
