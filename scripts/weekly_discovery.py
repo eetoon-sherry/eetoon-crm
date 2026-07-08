@@ -26,7 +26,7 @@ SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = os.environ.get('SMTP_USER', '')
 SMTP_PASS    = os.environ.get('SMTP_PASS', '')
-NOTIFY_EMAIL = os.environ.get('NOTIFY_EMAIL', '')
+NOTIFY_EMAIL = ''  # Weekly discovery email notifications disabled.
 
 HEADERS = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'}
 

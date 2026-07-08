@@ -35,7 +35,7 @@ def get_smtp_config():
     user = s.get("user") or os.getenv("SMTP_USER")
     password = s.get("password") or os.getenv("SMTP_PASS")
     sender_name = s.get("sender_name") or os.getenv("SENDER_NAME") or "Sherry | EETOON GROUP"
-    bcc = s.get("bcc") or os.getenv("BCC_EMAIL") or ""
+    bcc = ""  # BCC disabled: do not copy Sherry/Gmail on CRM sends.
 
     if not host or not user or not password:
         raise RuntimeError("SMTP is not configured. Add [smtp] settings in Streamlit Secrets.")

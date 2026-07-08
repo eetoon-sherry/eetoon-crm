@@ -22,7 +22,7 @@ SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = required_env('SMTP_USER')
 SMTP_PASS    = required_env('SMTP_PASS')
 SENDER_NAME  = os.environ.get('SENDER_NAME', 'Sherry | EETOON GROUP')
-BCC_EMAIL    = os.environ.get('BCC_EMAIL', '')
+BCC_EMAIL    = ''  # BCC disabled: do not copy Sherry/Gmail on CRM sends.
 
 
 def sb_request(method, path, data=None, params=None):

@@ -21,7 +21,7 @@ SMTP_HOST    = os.environ.get('SMTP_HOST', 'smtp.qiye.163.com')
 SMTP_PORT    = int(os.environ.get('SMTP_PORT', '465'))
 SMTP_USER    = os.environ.get('SMTP_USER', '')
 SMTP_PASS    = os.environ.get('SMTP_PASS', '')
-NOTIFY_EMAIL = os.environ.get('NOTIFY_EMAIL', '')
+NOTIFY_EMAIL = ''  # Email reminders disabled: do not notify Sherry addresses.
 
 
 def sb_get(path, params=None):
